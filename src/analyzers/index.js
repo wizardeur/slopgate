@@ -4,12 +4,12 @@
 // of changed files (not just diff lines) and emits findings in the standard
 // schema. Two kinds ship:
 //
-//   python-ast  — bundled, in-process: real Python AST via stdlib. Upgrades
-//                 shield precision (multi-line except:pass, while-True break
-//                 analysis, eval/shell=True call nodes, f-string SQL through
-//                 call arguments) and adds syntax-error gating (SG-AST-001).
-//   external    — configurable repo tools (pymap --check, jsmap --check,
-//                 codemap --check, ...): run a command, exit != 0 -> finding.
+//   python-ast:  bundled, in-process. Real Python AST via stdlib. Upgrades
+//                shield precision (multi-line except:pass, while-True break
+//                analysis, eval/shell=True call nodes, f-string SQL through
+//                call arguments) and adds syntax-error gating (SG-AST-001).
+//   external:    configurable repo tools. Runs a command; a nonzero exit
+//                becomes a finding.
 //
 // Availability is probed, never assumed; everything degrades to regex-only.
 
@@ -22,7 +22,7 @@ const { runExternalAnalyzers } = require('./external');
 const { isTestFile } = require('../parse');
 
 // Run all configured analyzers over changed files.
-//   files: [{ path, content }] — full post-change contents the provider could read
+//   files: full post-change file contents as [{ path, content }], when the provider can read them
 //   config.analyzers: { pythonAst, jsAst, external: [...] }
 // Returns { findings, ran: [{ id, available, analyzed?, findings, error? }] }
 function runAnalyzers(files, config, { repoRoot = process.cwd() } = {}) {
@@ -30,7 +30,7 @@ function runAnalyzers(files, config, { repoRoot = process.cwd() } = {}) {
   const ran = [];
   let findings = [];
 
-  // ignorePaths means "never scan this path" — for every layer, analyzers
+  // ignorePaths means "never scan this path": for every layer, analyzers
   // included (a repo that vendors the linter must exempt the linter).
   const ignored = (p) => (config.ignorePaths || []).some((rx) => rx && rx.test(p));
   const scannable = files.filter((f) => !ignored(f.path));

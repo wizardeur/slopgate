@@ -37,7 +37,7 @@ const shields = [
       // interpolation would drown every legitimate {$this->table}.
       const phpSuperglobalSql =
         /\b(?:SELECT|INSERT|UPDATE|DELETE)\b/i.test(line) && /\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\b/i.test(line);
-      return sqlViaInterpolation || phpSuperglobalSql; // slopgate-ignore — pattern source co-occurs with its own trigger by construction
+      return sqlViaInterpolation || phpSuperglobalSql; // slopgate-ignore: pattern source co-occurs with its own trigger by construction
     },
     // Multi-line statements: a SQL verb and an interpolation marker within a
     // bounded window of the same added block, in either order.
@@ -163,8 +163,8 @@ const shields = [
       'Log or propagate structured exceptions rather than silently masking security or persistence failures.',
     appliesTo: 'non-test',
     match(line) {
-      // `except [Exception] [as e]: pass|continue` — the old regex could not
-      // parse `except Exception as e: pass` and missed it entirely.
+      // `except [Exception] [as e]: pass|continue`, including the `as`
+      // binding, and `contextlib.suppress` on its own line.
       const pySwallow = /^\s*except(?:\s+\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)*)*)?\s*:\s*(?:pass|continue)\s*(?:#.*)?$/.test(line);
       const pySuppress = /\bcontextlib\.suppress\s*\(\s*(?:Exception|BaseException)?\s*\)/.test(line);
       const jsEmptyCatch = /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/.test(line);
@@ -262,14 +262,14 @@ const shields = [
     },
     // The real pwn-request signal: pull_request_target (privileged context)
     // combined with untrusted checkout/interpolation ANYWHERE in the file's
-    // diff — the dangerous step is often pre-existing context, not an added
+    // diff: the dangerous step is often pre-existing context, not an added
     // line. Applied per-hunk and per-file by the engine.
     blockMatch(text, { filePath }) {
       return this.fileMatch(text, { filePath });
     },
     fileMatch(text, { filePath }) {
       if (!/\.github\/workflows\//i.test(filePath)) return null;
-      // Already scoped to workflow files, so the bare keyword is enough —
+      // Already scoped to workflow files, so the bare keyword is enough:
       // `on: pull_request_target` must not depend on line-position anchoring.
       const privileged = /\bpull_request_target\b/.test(text);
       const untrusted =
@@ -336,7 +336,7 @@ const shields = [
     match(line) {
       const tight = /\bsetInterval\s*\([^,]+,\s*(\d{1,4})\s*\)/i.exec(line);
       if (tight && parseInt(tight[1], 10) < 50) return { variant: 'setInterval' };
-      // Busy `while true` loop; exempt when the same line carries an exit —
+      // Busy `while true` loop; exempt when the same line carries an exit:
       // (break/return/...).
       const busy =
         /\bwhile\s*\(\s*(?:true|1)\s*\)|\bwhile\s+(?:True|1)\s*:/i.test(line) &&
@@ -363,7 +363,7 @@ const shields = [
     appliesTo: 'non-test',
     match(line) {
       // Python: request data straight into a file open/send, or whole-archive
-      // extraction (zip-slip — members are never validated by the stdlib).
+      // extraction (zip-slip: members are never validated by the stdlib).
       const pyOpen =
         /\b(?:open|send_file|send_from_directory)\s*\(\s*(?:os\.path\.join\s*\([^)]*)?request\./i.test(line);
       const pyExtract = /\bextractall\s*\(/.test(line);
@@ -390,7 +390,7 @@ const shields = [
       return null;
     },
     // Split statements: a joined path built from request data on one line,
-    // the file-read/send sink on a later one — the same line-level gap the
+    // the file-read/send sink on a later one: the same line-level gap the
     // block pass closed for SQL.
     blockMatch(block) {
       if (
@@ -414,7 +414,7 @@ const shields = [
     match(line) {
       // Bare md5()/sha1() calls are legitimate for checksums and cache keys,
       // so every variant is gated on a security-context keyword. The gate
-      // matches snake_case segments too (reset_token) — \b would never fire
+      // matches snake_case segments too (reset_token): \b would never fire
       // before a keyword preceded by an underscore.
       const ctx =
         /(?<![a-z0-9])(?:password|passwd|pwd|token|secret|apikey|api_key|auth|session|cookie|signature|hmac|otp|nonce|credential|cert)(?![a-z0-9])/i;
@@ -480,8 +480,8 @@ const shields = [
     match(line) {
       return /verify_signature['"]?\s*:\s*False|['"]?verify['"]?\s*:\s*false/.test(line);
     },
-    // jwt.verify()/jwt.decode() whose argument window never pins `algorithms`
-    // — the classic alg-confusion shape, usually spanning several lines.
+    // jwt.verify()/jwt.decode() whose argument window never pins `algorithms`:
+    // the classic alg-confusion shape, usually spanning several lines.
     blockMatch(block) {
       for (const m of block.matchAll(/\bjwt\.(?:verify|decode)\s*\(/g)) {
         const win = block.slice(m.index, m.index + 300);
@@ -513,7 +513,7 @@ const shields = [
   // advisory with "minBlockSeverity": "HIGH". Patterns are written so their
   // own regex-literal source text cannot self-match (escaped forms, the
   // LIBXML_?NOENT trick, quote-required headers). Wildcard CORS *without*
-  // credentials is deliberately unflagged — that is the public-API norm.
+  // credentials is deliberately unflagged: that is the public-API norm.
 
   {
     id: 'SG-SEC-019',
@@ -524,12 +524,12 @@ const shields = [
       'Parse untrusted XML with defusedxml (Python) and never enable external-entity resolution (libxml NOENT, lxml entity resolution, libxmljs entity option).',
     appliesTo: 'non-test',
     match(line) {
-      // Entity resolution explicitly enabled — dangerous regardless of source.
+      // Entity resolution explicitly enabled: dangerous regardless of source.
       const entitiesOn =
         /resolve_entities\s*=\s*True|LIBXML_?NOENT|libxml_disable_entity_loader\s*\(\s*false|noent\s*:\s*true/i.test(
           line
         );
-      // Stdlib XML parse of request data — entity-expansion vulnerable by
+      // Stdlib XML parse of request data: entity-expansion vulnerable by
       // defusedxml's own documentation (etree, minidom, sax, pyexpat).
       const stdlibParse =
         /\b(?:ET|etree|ElementTree|minidom|sax|cElementTree|lxml)\s*\.\s*(?:parse|parseString|fromstring|iterparse)\s*\([^)]*(?:request\.|req\.|\$_(?:POST|GET|REQUEST)|body)/i.test(
@@ -545,7 +545,7 @@ const shields = [
     severity: 'MEDIUM',
     title: 'Permissive or Reflected Cross-Origin Resource Sharing (CORS)',
     remediation:
-      'Allowlist origins explicitly — never echo the Origin header back blindly — and never combine wildcard or reflected origins with credentials.',
+      'Allowlist origins explicitly and do not echo the Origin header back. Never combine wildcard or reflected origins with credentials.',
     appliesTo: 'non-test',
     match(line) {
       // Two header spellings: "name", value (JS arrays) and 'name: value'
@@ -586,7 +586,7 @@ const shields = [
     match() {
       return null;
     },
-    // A multer configuration whose argument window never tightens fileFilter —
+    // A multer configuration whose argument window never tightens fileFilter:
     // the exact shape AI-generated upload endpoints forget.
     blockMatch(block) {
       for (const m of block.matchAll(/\bmulter\s*\(\s*\{/g)) {
