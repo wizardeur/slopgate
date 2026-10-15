@@ -56,6 +56,21 @@ def string_value(n):
 def has_sql(text):
     return bool(text and SQL_VERB.search(text))
 
+# Keyword names DB-API drivers use for the bind-parameter argument.
+BIND_PARAM_KWARGS = {"params", "parameters", "param", "vars", "bindings",
+                     "bind_params", "args", "values", "data"}
+
+def binds_parameters(call):
+    # A second positional argument, or a driver-style keyword, is the parameter
+    # list the driver binds. When the query text is a plain string constant and
+    # parameters were passed, there is no injection surface at all.
+    if len(call.args) > 1:
+        return True
+    return any(k.arg in BIND_PARAM_KWARGS for k in call.keywords)
+
+def is_parameterized(sql_node, call):
+    return is_str_const(sql_node) and binds_parameters(call)
+
 def own_break(loop):
     # break belonging to THIS loop: nested loops keep their own
     stack = list(loop.body)
@@ -184,10 +199,14 @@ def analyze(path, src, is_test):
             if fname in EXEC_SINKS and n.args:
                 arg0 = n.args[0]
                 if has_sql(string_value(arg0)):
-                    add("SG-SEC-001", "CWE-89", "CRITICAL",
-                        "Unparameterized SQL Injection (f-string/interpolated query)",
-                        path, n.lineno,
-                        "Use parameterized queries (?, %s, :name) and query allowlists.")
+                    # A plain string constant plus bind parameters is the
+                    # remediation this rule itself prescribes: the driver
+                    # binds the values, nothing is interpolated into the text.
+                    if not is_parameterized(arg0, n):
+                        add("SG-SEC-001", "CWE-89", "CRITICAL",
+                            "Unparameterized SQL Injection (f-string/interpolated query)",
+                            path, n.lineno,
+                            "Use parameterized queries (?, %s, :name) and query allowlists.")
                 elif isinstance(arg0, ast.Name) and arg0.id in sql_aliases:
                     add("SG-SEC-001", "CWE-89", "CRITICAL",
                         "Unparameterized SQL Injection (interpolated query via variable)",
@@ -244,10 +263,15 @@ def analyze(path, src, is_test):
         return "request" in low or "req" in low or "argv" in low
 
     def mentions_taint(node, tainted):
+        # Field-based, not dump-substring based: ast.dump on Python >= 3.8
+        # emits Name(id='x', ctx=Load()), so a "Name(id='x')" substring test
+        # never matched and this rule was dead on every modern python3.
         if not tainted:
             return False
-        d = ast.dump(node)
-        return any(("Name(id='%s')" % t) in d for t in tainted)
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id in tainted:
+                return True
+        return False
 
     def scan_taint(scope_nodes):
         tainted = set()
@@ -263,11 +287,19 @@ def analyze(path, src, is_test):
                 cwe = TAINT_SINK_CWE.get(fname)
                 if not cwe and owner in ("requests", "httpx", "axios") and fname in ("get", "post", "put", "delete", "request"):
                     cwe = "CWE-918"
-                if cwe and any(mentions_taint(a, tainted) for a in list(n.args) + [k.value for k in n.keywords]):
-                    add("SG-TAINT-001", cwe, "CRITICAL",
-                        "User-Controlled Input Reaches Dangerous Sink (one hop)",
-                        path, n.lineno,
-                        "Validate and allowlist user input before it reaches sinks; use parameterized APIs.")
+                if cwe:
+                    if cwe == "CWE-89":
+                        # SQL injection lives in the query text. A tainted value
+                        # handed to the driver as a bind parameter is bound, not
+                        # concatenated, so the parameter list is not a sink.
+                        candidates = [n.args[0]] if n.args else []
+                    else:
+                        candidates = list(n.args) + [k.value for k in n.keywords]
+                    if any(mentions_taint(a, tainted) for a in candidates):
+                        add("SG-TAINT-001", cwe, "CRITICAL",
+                            "User-Controlled Input Reaches Dangerous Sink (one hop)",
+                            path, n.lineno,
+                            "Validate and allowlist user input before it reaches sinks; use parameterized APIs.")
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

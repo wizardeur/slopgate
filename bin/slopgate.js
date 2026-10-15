@@ -6,6 +6,11 @@
 //   slopgate --base main         diff HEAD against origin/main (default: stdin)
 //   slopgate --json              machine-readable output
 //   cat foo.diff | slopgate
+//
+// --base is fail-closed, exactly like the Action: only a merge-base diff
+// (origin/main...HEAD) is a complete view of the change. If it cannot be
+// computed, the CLI exits 1 with setup instructions instead of scanning a
+// partial range (defect 3: a shallow clone used to fall back to HEAD~1).
 
 const fs = require('fs');
 const { evaluate } = require('../src/engine');
@@ -25,9 +30,17 @@ function arg(name, fallback = null) {
 function readDiff() {
   const file = arg('--diff');
   if (file) return fs.readFileSync(file, 'utf-8');
-  if (has('--base') && arg('--base')) {
-    const { execSync } = require('child_process');
-    return execSync(`git diff origin/${arg('--base')}...HEAD`, { encoding: 'utf-8' });
+  const base = arg('--base');
+  if (has('--base') && base) {
+    // Same fail-closed guard as the Action: a diff that cannot be computed
+    // against the merge base must stop the gate, not silently shrink its range.
+    const { resolveDiff, diffFailureMessage } = require('../src/diff');
+    const diff = resolveDiff(base);
+    if (diff === null) {
+      console.error(diffFailureMessage(base));
+      process.exit(1);
+    }
+    return diff;
   }
   if (!process.stdin.isTTY) return fs.readFileSync(0, 'utf-8');
   console.error('Usage: slopgate (--diff <file> | --base <branch> | diff on stdin) [--config <path>] [--json]');

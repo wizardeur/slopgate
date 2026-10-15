@@ -205,15 +205,23 @@ const shields = [
     remediation:
       'Use yaml.safe_load() (or Loader=FullLoader) and JSON schema validation; require weights_only=True for torch.load; never deserialize untrusted native objects.',
     appliesTo: 'non-test',
-    match(line) {
+    match(line, { filePath }) {
       const pickle =
         /\b(?:pickle\.loads?|cPickle\.loads?|shelve\.open|marshal\.loads?|dill\.loads?|joblib\.load)\s*\(/i.test(line);
       const torch = /\btorch\.load\s*\(/i.test(line) && !/weights_only\s*=\s*True/.test(line);
       const numpy = /\bnumpy\.load\s*\(/i.test(line) && /allow_pickle\s*=\s*True/.test(line);
-      const yamlUnsafe =
-        /\byaml\.(?:load|unsafe_load|full_load)\s*\(/i.test(line) &&
-        // Loader=SafeLoader / Loader=FullLoader are accepted opt-outs.
-        !/Loader\s*=\s*(?:yaml\.)?(?:Safe|Full)Loader|safe_load/i.test(line);
+      const yamlCall = /\byaml\.(?:load|unsafe_load|full_load)\s*\(/i.test(line);
+      // Loader=SafeLoader / Loader=FullLoader / safe_load are accepted opt-outs.
+      const yamlOptOut = /Loader\s*=\s*(?:yaml\.)?(?:Safe|Full)Loader|safe_load/i.test(line);
+      // JS (js-yaml >= 4, and the `yaml` package) parses with a safe schema:
+      // `load` rejects !!js/function and the other JS-yaml types, verified
+      // against the installed js-yaml before this branch was written. So a bare
+      // JS yaml.load is NOT unsafe deserialization; only an explicitly full or
+      // unsafe schema is. Python keeps PyYAML semantics, where yaml.load
+      // without a Loader is unsafe regardless of version.
+      const isJs = /\.(?:m?js|cjs|[jt]sx?)$/i.test(filePath || '');
+      const jsUnsafeSchema = /FULL_SCHEMA|unsafe|full_load|!!js\//i.test(line);
+      const yamlUnsafe = yamlCall && !yamlOptOut && (isJs ? jsUnsafeSchema : true);
       const dotNet =
         /BinaryFormatter|TypeNameHandling\s*=\s*(?:All|Auto|Objects)|ObjectInputStream/.test(line);
       const phpRuby = /\bunserialize\s*\(|\bMarshal\.load\b/.test(line);
@@ -305,23 +313,42 @@ const shields = [
     id: 'SG-SEC-011',
     cwe: 'CWE-829',
     severity: 'HIGH',
-    title: 'Unpinned Supply-Chain Dependency or Floating Image/Action Reference',
+    // Scope is stated exactly. By default this rule flags FLOATING refs (a
+    // branch, @latest, a wildcard range, a plain-HTTP source): refs that move
+    // without any action by the author. A version TAG is not in that set,
+    // because a tag is still a released version - set "requireShaPins": true in
+    // .slopgate.json to also require a full 40-char commit SHA for action refs,
+    // which is what actually makes a tag's mutability visible to the gate.
+    title: 'Floating Supply-Chain Reference (branch, sentinel ref or unbounded range)',
     remediation:
-      'Pin dependencies, container images and GitHub Actions to deterministic versions or digests; disallow unencrypted HTTP registries.',
+      'Pin dependencies and container images to deterministic versions or digests; pin GitHub Actions to a full ' +
+      'commit SHA and set "requireShaPins": true to make the gate enforce that; disallow unencrypted HTTP registries.',
     appliesTo: 'all',
-    match(line, { filePath }) {
+    match(line, { filePath, config }) {
+      const isWorkflow = /\.github\/workflows\//i.test(filePath);
       const npm =
         /package\.json$/i.test(filePath) &&
         /"[^"]+"\s*:\s*"(?:\*|latest|git\+https?:\/\/[^"]*#(?:main|master|HEAD)|git\+http:\/\/|http:\/\/)/i.test(line);
       const action =
-        /\.github\/workflows\//i.test(filePath) &&
+        isWorkflow &&
         /\buses:\s*[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+@(?:main|master|HEAD|latest)\b/i.test(line);
+      // Opt-in strict mode: a ref that is not a full commit SHA is mutable.
+      // Local actions (`uses: ./path`) reference no remote ref and never match.
+      const actionUnpinned =
+        !!config &&
+        config.requireShaPins === true &&
+        isWorkflow &&
+        /\buses:\s*[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+@[^\s#]+/i.test(line) &&
+        !/@[0-9a-f]{40}\b/i.test(line);
       // Floating container images in workflows / compose / Dockerfile
       const image =
         /(?:dockerfile|docker-compose|\.ya?ml)$/i.test(filePath) &&
         /(?:^\s*(?:FROM|image)\s+:?\s*)[\w./-]+:(?:latest|main|master)\b/i.test(line);
       const pipHttp = /\bpip(?:3)?\s+install\s+.*(?:--(?:extra-)?index-url\s+http:|https?:\/\/)/i.test(line);
       const npmLatest = /\bnpm\s+(?:i|install|add)\s+.*@latest\b/i.test(line);
+      if (actionUnpinned) {
+        return { variant: 'sha-pin', title: 'Action Reference Not Pinned to a Full Commit SHA' };
+      }
       return npm || action || image || pipHttp || npmLatest;
     },
   },

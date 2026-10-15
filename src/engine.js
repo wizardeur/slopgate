@@ -106,7 +106,7 @@ function evaluate(diffText, options = {}) {
     // Generated/vendored/config-ignored files: counted in metrics, not scanned.
     const skipped = isSkippedFile(file.path);
 
-    const ctx = { filePath: file.path, isTestFile: testFile };
+    const ctx = { filePath: file.path, isTestFile: testFile, config };
 
     if (!skipped) {
       // ---- per-line pass (exact line numbers) ------------------------------

@@ -179,7 +179,7 @@ check('cli: vulnerable diff exits 1, clean exits 0, --json parses', () => {
 // ========================== v1.1 hardening checks ==========================
 
 const { resolveDiff } = require('../src/action');
-const { globToRegex } = require('../src/config');
+const { globToRegex, loadConfig } = require('../src/config');
 
 const hard = evaluate(read('hardened.diff'));
 
@@ -310,15 +310,97 @@ check('lockfiles and minified bundles are never scanned', () => {
   assert.strictEqual(res.isGreen, true);
 });
 
+check('shields: SG-SEC-011 flags a tag-pinned action only under requireShaPins, never a full SHA', () => {
+  // Regression (defect 4): the rule matched only @main|master|HEAD|latest, so
+  // a tag pin was invisible and the gate reported green without supply-chain
+  // protection while the README promised "unpinned actions". The scope is now
+  // explicit: floating refs by default, plus an opt-in full-SHA requirement.
+  const wf = (line) =>
+    'diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n' +
+    '--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n' +
+    '@@ -1,1 +1,2 @@\n name: ci\n+' + line + '\n';
+  const SHA = '11bd71901bbe5b1630ceea73d27597364c9af683';
+  const def = { disable: [], ignorePaths: [], minBlockSeverity: 'MEDIUM' };
+  const strict = { ...def, requireShaPins: true };
+  const rules = (r) => r.securityFindings.map((f) => f.ruleId);
+
+  // Default scope: branch and sentinel refs only. A mutable tag is not a hit.
+  assert.deepStrictEqual(rules(evaluate(wf('      - uses: actions/checkout@main'), { config: def })), ['SG-SEC-011']);
+  assert.deepStrictEqual(rules(evaluate(wf('      - uses: actions/checkout@v4'), { config: def })), []);
+
+  // requireShaPins: any ref that is not a full 40-char commit SHA is mutable.
+  const tag = evaluate(wf('      - uses: actions/checkout@v4'), { config: strict });
+  const f = tag.securityFindings.find((x) => x.ruleId === 'SG-SEC-011');
+  assert.ok(f, JSON.stringify(tag.securityFindings));
+  assert.strictEqual(f.variant, 'sha-pin');
+  assert.ok(f.title.includes('Full Commit SHA'), f.title);
+  assert.deepStrictEqual(rules(evaluate(wf('      - uses: wizardeur/slopgate@v1.9.1'), { config: strict })), ['SG-SEC-011']);
+  assert.deepStrictEqual(rules(evaluate(wf('      - uses: actions/checkout@main'), { config: strict })), ['SG-SEC-011']);
+  assert.deepStrictEqual(rules(evaluate(wf(`      - uses: actions/checkout@${SHA}`), { config: strict })), []);
+  assert.deepStrictEqual(rules(evaluate(wf('      - uses: ./tools/slopgate'), { config: strict })), []);
+});
+
+check('config: requireShaPins is read from .slopgate.json and defaults to false', () => {
+  const fsx = require('fs');
+  const osx = require('os');
+  const dir = fsx.mkdtempSync(path.join(osx.tmpdir(), 'sg-cfg-'));
+  fsx.writeFileSync(path.join(dir, '.slopgate.json'), JSON.stringify({ requireShaPins: true }));
+  assert.strictEqual(loadConfig(dir).requireShaPins, true);
+  fsx.writeFileSync(path.join(dir, '.slopgate.json'), JSON.stringify({}));
+  assert.strictEqual(loadConfig(dir).requireShaPins, false);
+  fsx.rmSync(dir, { recursive: true, force: true });
+});
+
 // ---- fail-closed diff resolution ---------------------------------------------
 check('resolveDiff: returns diff when base ref exists', () => {
   const run = (cmd) => (cmd.includes('diff origin/main...HEAD') ? 'DIFFTEXT' : '');
   assert.strictEqual(resolveDiff('main', run), 'DIFFTEXT');
 });
 
-check('resolveDiff: falls back to HEAD~1 when base is missing', () => {
-  const run = (cmd) => (cmd.includes('HEAD~1') ? 'DIFF1' : '');
-  assert.strictEqual(resolveDiff('main', run), 'DIFF1');
+check('resolveDiff: fails closed instead of scanning only HEAD~1 when the merge base is unreachable', () => {
+  // Regression (defect 3). A depth>=2 checkout whose merge base lies outside
+  // the clone previously fell through to `git diff HEAD~1`, scanned only the
+  // last commit, and still returned a normal-looking verdict. A partial range
+  // must never stand in for the merge-base range. (This check replaced one
+  // that asserted the partial fallback was correct.)
+  const run = (cmd) => (cmd.includes('HEAD~1') || cmd.includes('diff HEAD') ? 'PARTIAL-DIFF' : '');
+  assert.strictEqual(resolveDiff('main', run), null);
+
+  // A failed base fetch must not resurrect any fallback either.
+  assert.strictEqual(
+    resolveDiff('main', () => {
+      throw new Error('fatal: bad revision');
+    }),
+    null
+  );
+});
+
+check('cli: --base without a fetchable base ref fails closed with instructions, not a stack trace', () => {
+  const fsx = require('fs');
+  const osx = require('os');
+  const tmp = fsx.mkdtempSync(path.join(osx.tmpdir(), 'sg-nobase-'));
+  const git = (...a) => spawnSync('git', a, { cwd: tmp, encoding: 'utf-8' });
+  git('init', '-q');
+  git('config', 'user.email', 'gate@example.invalid');
+  git('config', 'user.name', 'gate');
+  fsx.writeFileSync(path.join(tmp, 'a.js'), 'const a = 1;\n');
+  git('add', '-A');
+  git('commit', '-qm', 'init');
+  const bin = path.join(ROOT, 'bin', 'slopgate.js');
+  const res = spawnSync('node', [bin, '--base', 'main'], {
+    cwd: tmp,
+    encoding: 'utf-8',
+    env: { ...process.env, NODE_OPTIONS: '' },
+  });
+  const out = `${res.stdout || ''}${res.stderr || ''}`;
+  assert.strictEqual(res.status, 1, out);
+  assert.ok(out.includes('[slopgate] FATAL'), out);
+  assert.ok(out.includes('fetch-depth: 0'), out);
+  // The instruction must name a command that actually creates the ref, not a
+  // bare `git fetch origin main` (which only writes FETCH_HEAD).
+  assert.ok(out.includes('refs/remotes/origin/main'), out);
+  assert.ok(!/\n\s+at .*execSync/.test(out), `raw stack trace leaked:\n${out}`);
+  fsx.rmSync(tmp, { recursive: true, force: true });
 });
 
 check('resolveDiff: returns null (fail closed) when no diff can be computed', () => {
@@ -655,6 +737,81 @@ check('python-ast: one-hop taint flagged with sink-specific CWEs', () => {
   assert.strictEqual(t.length, 2, JSON.stringify(r.findings));
   assert.ok(t.some((f) => f.cwe === 'CWE-78' && f.line === 3));
   assert.ok(t.some((f) => f.cwe === 'CWE-89'));
+});
+
+check('python-ast: taint matching is keyed on Name fields, not ast.dump substrings', () => {
+  // Regression (defect 1): the one-hop taint pass tested `"Name(id='x')" in
+  // ast.dump(node)`. Since Python 3.8 the dump carries ctx=Load(), so the
+  // substring never matched and SG-TAINT-001 was dead on every modern python3
+  // (README advertised it for Python and PHP).
+  const direct = analyzePythonFiles([
+    { path: 'direct.py', content: 'import os\ndef run(req):\n    cmd = req.args.get("c")\n    os.system(cmd)\n', is_test: false },
+  ]);
+  const d = direct.findings.filter((f) => f.ruleId === 'SG-TAINT-001');
+  assert.strictEqual(d.length, 1, JSON.stringify(direct.findings));
+  assert.strictEqual(d[0].cwe, 'CWE-78');
+  assert.strictEqual(d[0].line, 4);
+
+  // The match must also hold when the tainted name is nested inside an
+  // expression rather than standing alone as the argument.
+  const nested = analyzePythonFiles([
+    { path: 'nested.py', content: 'def q(conn, request):\n    uid = request.args.get("id")\n    return conn.execute("SELECT * FROM t WHERE id = " + uid)\n', is_test: false },
+  ]);
+  const n = nested.findings.filter((f) => f.ruleId === 'SG-TAINT-001');
+  assert.strictEqual(n.length, 1, JSON.stringify(nested.findings));
+  assert.strictEqual(n[0].cwe, 'CWE-89');
+  assert.strictEqual(n[0].line, 3);
+});
+
+check('python-ast: bound parameters exempt SG-SEC-001, interpolation still flagged', () => {
+  // Regression (defect 2): the AST pass flagged any execute() whose first
+  // argument contained a SQL verb, without looking at whether the call passed
+  // bind parameters. A correctly parameterized query was reported CRITICAL
+  // CWE-89 against the rule's own remediation.
+  const bound = [
+    ['qm.py', 'def q(conn, name):\n    return conn.execute("SELECT * FROM users WHERE name = ?", (name,))\n'],
+    ['ql.py', 'def q(conn, name):\n    return conn.execute("SELECT * FROM users WHERE name = ?", [name])\n'],
+    ['qp.py', 'def q(conn, name):\n    return conn.execute("SELECT * FROM users WHERE name = %s", (name,))\n'],
+    ['qn.py', 'def q(conn, name):\n    return conn.execute("SELECT * FROM users WHERE name = :name", {"name": name})\n'],
+    ['qk.py', 'def q(conn, name):\n    return conn.execute("SELECT * FROM users WHERE name = ?", params=(name,))\n'],
+    ['qs.py', 'def q(conn):\n    return conn.execute("SELECT 1")\n'],
+    ['qd.py', 'def q(conn):\n    return conn.execute("CREATE TABLE audit (id int)")\n'],
+  ].map(([path, content]) => ({ path, content, is_test: false }));
+  const r = analyzePythonFiles(bound);
+  assert.strictEqual(r.findings.filter((f) => f.ruleId === 'SG-SEC-001').length, 0, JSON.stringify(r.findings));
+
+  const injected = analyzePythonFiles([
+    { path: 'f.py', content: 'def q(conn, uid):\n    return conn.execute(f"SELECT * FROM users WHERE id = {uid}")\n', is_test: false },
+    // interpolation plus parameters is still interpolation
+    { path: 'fp.py', content: 'def q(conn, uid):\n    return conn.execute(f"SELECT * FROM users WHERE id = {uid}", (uid,))\n', is_test: false },
+  ]);
+  assert.strictEqual(injected.findings.filter((f) => f.ruleId === 'SG-SEC-001').length, 2, JSON.stringify(injected.findings));
+
+  // A tainted value in the bind-parameter position is bound by the driver, so
+  // it is not a one-hop taint sink either; the query text is.
+  const taintedBound = analyzePythonFiles([
+    { path: 'tb.py', content: 'def q(conn, request):\n    uid = request.args.get("id")\n    return conn.execute("SELECT * FROM t WHERE id = %s", (uid,))\n', is_test: false },
+  ]);
+  assert.strictEqual(taintedBound.findings.filter((f) => f.ruleId === 'SG-TAINT-001').length, 0, JSON.stringify(taintedBound.findings));
+});
+
+check('engine: parameterized SQL passes the gate, interpolated SQL still blocks', () => {
+  const green =
+    'diff --git a/db.py b/db.py\n--- a/db.py\n+++ b/db.py\n@@ -1,1 +1,2 @@\n def q(conn, name):\n' +
+    '+    return conn.execute("SELECT * FROM users WHERE name = ?", (name,))\n';
+  const g = evaluate(green, {
+    files: [{ path: 'db.py', content: 'def q(conn, name):\n    return conn.execute("SELECT * FROM users WHERE name = ?", (name,))\n' }],
+  });
+  assert.strictEqual(g.isGreen, true, JSON.stringify(g.securityFindings));
+
+  const red =
+    'diff --git a/db.py b/db.py\n--- a/db.py\n+++ b/db.py\n@@ -1,1 +1,2 @@\n def q(conn, name):\n' +
+    '+    return conn.execute(f"SELECT * FROM users WHERE name = {name}")\n';
+  const r = evaluate(red, {
+    files: [{ path: 'db.py', content: 'def q(conn, name):\n    return conn.execute(f"SELECT * FROM users WHERE name = {name}")\n' }],
+  });
+  assert.strictEqual(r.isGreen, false);
+  assert.ok(r.securityFindings.some((f) => f.ruleId === 'SG-SEC-001'), JSON.stringify(r.securityFindings));
 });
 
 const phpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-php-'));
@@ -1049,6 +1206,33 @@ check('v1.9 FP battery: allowlisted cors, filtered multer, trusted xml, pinned h
     const hit = r.securityFindings.filter((f) => f.ruleId >= 'SG-SEC-019');
     assert.strictEqual(hit.length, 0, `${line} -> ${JSON.stringify(hit)}`);
   }
+});
+
+check('shields: SG-SEC-007 clears js-yaml 4 load but keeps unsafe schemas and PyYAML load', () => {
+  // Measured specificity defect (PR 335): js-yaml >= 4 parses with a safe
+  // schema, so `yaml.load(text, { schema: patchSchema })` cannot construct a
+  // function (!!js/function is rejected). Flagging it CRITICAL CWE-502 was a
+  // false positive that blocked a clean PR. An explicitly full or unsafe
+  // schema is still a hit, and Python keeps PyYAML semantics.
+  const js = (line) =>
+    'diff --git a/scripts/s.mjs b/scripts/s.mjs\n--- a/scripts/s.mjs\n+++ b/scripts/s.mjs\n' +
+    '@@ -1,1 +1,2 @@\n const x = 1;\n+' + line + '\n';
+  const py = (line) =>
+    'diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n x = 1\n+' + line + '\n';
+  const rules = (r) => r.securityFindings.map((f) => f.ruleId);
+
+  // JS: safe by default (js-yaml 4), including the exact PR 335 shape.
+  assert.deepStrictEqual(rules(evaluate(js("  return yaml.load(readFileSync(file, 'utf8'), { schema: patchSchema });"))), []);
+  assert.deepStrictEqual(rules(evaluate(js('const cfg = yaml.load(text);'))), []);
+  // JS: an explicitly unsafe schema or API is still flagged.
+  assert.deepStrictEqual(rules(evaluate(js('const cfg = yaml.load(text, { schema: yaml.DEFAULT_FULL_SCHEMA });'))), ['SG-SEC-007']);
+  assert.deepStrictEqual(rules(evaluate(js('const cfg = yaml.load(text, { schema: FULL_SCHEMA });'))), ['SG-SEC-007']);
+  assert.deepStrictEqual(rules(evaluate(js('const cfg = yaml.load(text, { schema: yaml.DEFAULT_SCHEMA.extend([jsFunctionType]) });'))), []);
+  assert.deepStrictEqual(rules(evaluate(js('const cfg = yaml.full_load(text);'))), ['SG-SEC-007']);
+  // Python: PyYAML's load without a Loader is unsafe and stays a hit.
+  assert.deepStrictEqual(rules(evaluate(py('cfg = yaml.load(open(p))'))), ['SG-SEC-007']);
+  assert.deepStrictEqual(rules(evaluate(py('cfg = yaml.load(open(p), Loader=yaml.SafeLoader)'))), []);
+  assert.deepStrictEqual(rules(evaluate(py('cfg = yaml.safe_load(open(p))'))), []);
 });
 
 fs.rmSync(v18, { recursive: true, force: true });
