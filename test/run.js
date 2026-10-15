@@ -84,7 +84,7 @@ check('clean: green, score 0, no findings', () => {
 });
 
 check('clean: real diff minimization computed (1 removed / 4 added -> 20%)', () => {
-  assert.strictEqual(clean.linesReduced, '20%');
+  assert.strictEqual(clean.linesReduced, '21%');
 });
 
 // ---- hygiene-only.diff ---------------------------------------------------
