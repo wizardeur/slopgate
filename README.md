@@ -58,12 +58,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: ./tools/slopgate   # or slopgate@v1.9 where a cross-repo ref works
+      - uses: wizardeur/slopgate@v1.9.1
         with:
           base_branch: main
 ```
 
-Inputs: `base_branch`, `fail_on_slop`, `post_pr_comment`, `auto_close_slop`, `ci_diagnostics`, `auto_polish`, `min_block_severity`, `config_path`, `sarif_file`, `github_token`. A shallow checkout fails closed with instructions — the gate never passes vacuously.
+`fetch-depth: 0` is required: the gate diffs against the merge base and fails closed with instructions on a shallow checkout — it never passes vacuously. Pin the action to a tag or, for stricter supply-chain hygiene, a full commit SHA.
+
+Inputs: `base_branch`, `fail_on_slop`, `post_pr_comment`, `auto_close_slop`, `ci_diagnostics`, `auto_polish`, `min_block_severity`, `config_path`, `sarif_file`, `github_token`. Outputs: `slop_score`, `lines_reduced`, `invariants_verified`, `ci_classification`, `flaky_jobs_count`. The verdict comment is a single post that updates in place on every push to the PR.
 
 ## CLI
 
@@ -81,7 +83,7 @@ git diff main...HEAD | node bin/slopgate.js # diff on stdin
 ```json
 {
   "disable": ["SG-SEC-018"],
-  "ignorePaths": ["vendor/**", "tools/slopgate/**"],
+  "ignorePaths": ["vendor/**"],
   "minBlockSeverity": "MEDIUM",
   "analyzers": { "external": [{ "id": "php-lint", "when": "\\.php$", "cmd": "php -l {file}" }] }
 }
@@ -89,6 +91,18 @@ git diff main...HEAD | node bin/slopgate.js # diff on stdin
 
 `disable` removes rules; `ignorePaths` (globs) exempts paths from every layer; `minBlockSeverity` (LOW/MEDIUM/HIGH/CRITICAL) sets the blocking floor — findings below it are advisory. Inline `// slopgate-ignore` (or `#`, `/* */`, `<!-- -->` variants) suppresses every layer at that line, including AST and graph findings on pre-existing lines of changed files.
 
-## Vendoring
+## Vendoring (optional)
 
-Personal GitHub accounts cannot resolve cross-repo private actions. Copy the repository under `tools/slopgate/` in the consumer repo and reference it with `uses: ./tools/slopgate`; exempt the copy via `ignorePaths`. Keep the copy in sync with upstream releases.
+Any repository — public or private — can reference the action directly once this repository is public. Vendor a copy instead if you want to pin the exact code you run and decouple from upstream releases: copy the repository under `tools/slopgate/`, reference it with `uses: ./tools/slopgate`, exempt the copy via `ignorePaths`, and re-sync when you adopt a new version.
+
+## Development
+
+```sh
+npm test        # 84 checks, no test framework, no dependencies to install
+```
+
+Zero runtime dependencies is a design rule, not an accident; the only third-party code in the tree is the vendored, version-pinned `@babel/parser` under `vendor/` (MIT). Layout: `src/shields.js` (the rules), `src/engine.js` (pipeline — normalization, suppression, severity gating, scoring), `src/analyzers/` (Python AST, JS/TS AST, import graph, external tools), `src/verdict.js` and `src/github.js` (verdict comment), `src/sarif.js`, `src/action.js` and `bin/slopgate.js` (entry points), `test/` (fixtures + checks).
+
+## License
+
+[MIT](LICENSE)
