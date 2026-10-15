@@ -1,0 +1,15 @@
+{
+  "name": "slopgate",
+  "version": "1.9.1",
+  "description": "Deterministic pull-request gate: hygiene checks, 22 CWE-mapped security shields, reachability analysis. Zero runtime dependencies.",
+  "license": "MIT",
+  "bin": {
+    "slopgate": "bin/slopgate.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/run.js"
+  }
+}

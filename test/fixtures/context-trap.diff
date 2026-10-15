@@ -1,0 +1,16 @@
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,8 @@
+ # Demo Service
+ 
+-Certainly! Here is the updated code:
++## Requirements
++
+ Run `deploy.sh` to begin. DO_NOT_MERGE_SLOP
+ 
+-Old install notes with weird \`escapes\`.
++See the docs for details.
++
++Requires Python 3.11 or later.

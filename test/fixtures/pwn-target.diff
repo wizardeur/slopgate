@@ -1,0 +1,14 @@
+diff --git a/.github/workflows/preview.yml b/.github/workflows/preview.yml
+index 1111111..2222222 100644
+--- a/.github/workflows/preview.yml
++++ b/.github/workflows/preview.yml
+@@ -1,7 +1,7 @@
+ name: preview
+-on: pull_request
++on: pull_request_target
+ jobs:
+   deploy-preview:
+     steps:
+       - uses: actions/checkout@v4
+         with:
+           ref: ${{ github.event.pull_request.head.ref }}

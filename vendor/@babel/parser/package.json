@@ -1,0 +1,8 @@
+{
+  "name": "@babel/parser",
+  "version": "8.0.7",
+  "main": "./lib/index.js",
+  "license": "MIT",
+  "description": "A JavaScript parser [vendored, pruned]",
+  "private": true
+}

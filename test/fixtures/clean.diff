@@ -1,0 +1,21 @@
+diff --git a/src/util.py b/src/util.py
+index 1111111..2222222 100644
+--- a/src/util.py
++++ b/src/util.py
+@@ -5,8 +5,8 @@ def format_size(n):
+ def format_size(n):
+     """Human-readable size."""
+     if n < 1024:
+         return f"{n} B"
+-    return "%d KB" % (n / 1024)
++    return f"{n / 1024:.1f} KB"
+diff --git a/tests/test_util.py b/tests/test_util.py
+index 3333333..4444444 100644
+--- a/tests/test_util.py
++++ b/tests/test_util.py
+@@ -10,3 +10,5 @@ def test_bytes_unchanged():
+ def test_bytes_unchanged():
+     assert format_size(512) == "512 B"
++
++def test_kb_one_decimal():
++    assert format_size(2048) == "2.0 KB"

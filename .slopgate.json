@@ -1,0 +1,4 @@
+{
+  "ignorePaths": ["test/fixtures/**"],
+  "minBlockSeverity": "MEDIUM"
+}

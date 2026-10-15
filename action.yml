@@ -1,0 +1,75 @@
+name: 'SlopGate PR Gate'
+author: 'slopgate'
+description: 'Deterministic pull-request gate: hygiene checks, 22 CWE-mapped security shields, reachability analysis, one self-updating PR comment.'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  base_branch:
+    description: 'Base branch to compare against'
+    required: false
+    default: 'main'
+  auto_polish:
+    description: 'Run repository-native linters (npm lint / cargo clippy / ruff)'
+    required: false
+    default: 'true'
+  fail_on_slop:
+    description: 'Fail the action when slop, hygiene defects or CWE findings are detected'
+    required: false
+    default: 'true'
+  ci_diagnostics:
+    description: 'Classify failing checks into Code Defect / Infra Flake / Triage Gate'
+    required: false
+    default: 'false'
+  github_token:
+    description: 'Token for posting the verdict comment (defaults to github.token)'
+    required: false
+    default: ${{ github.token }}
+  post_pr_comment:
+    description: 'Post/update the single in-place verdict comment on the PR'
+    required: false
+    default: 'true'
+  auto_close_slop:
+    description: 'Auto-close PRs with slop score >= 60 or any CRITICAL blocking finding'
+    required: false
+    default: 'false'
+  config_path:
+    description: 'Path to a .slopgate.json config (disable rules, ignore paths, severity bar)'
+    required: false
+    default: ''
+  sarif_file:
+    description: 'Write SARIF 2.1.0 results to this path (relative to the workspace) for codeql-action/upload-sarif'
+    required: false
+    default: ''
+  min_block_severity:
+    description: 'Findings below this severity are advisory and do not block (MEDIUM | HIGH | CRITICAL). Overrides the config file.'
+    required: false
+    default: ''
+
+outputs:
+  slop_score:
+    description: 'Slop score 0-100'
+  lines_reduced:
+    description: 'Share of the diff that removes lines (computed, not hardcoded)'
+  invariants_verified:
+    description: 'Share of the 22 shields that passed'
+  ci_classification:
+    description: 'ALL_GREEN, TRIAGE_GATED, INFRA_FLAKE, or CODE_DEFECT'
+  flaky_jobs_count:
+    description: 'Failing checks classified as upstream infra flakes'
+  gated_jobs_count:
+    description: 'Failing checks classified as maintainer triage gates'
+  security_findings_count:
+    description: 'Total CWE security findings'
+  critical_cwe_count:
+    description: 'CRITICAL-severity CWE findings'
+  blast_radius_layers:
+    description: 'Architectural layers touched by the diff'
+  suppressed_count:
+    description: 'Lines skipped via inline slopgate-ignore comments'
+
+runs:
+  using: 'node20'
+  main: 'src/action.js'

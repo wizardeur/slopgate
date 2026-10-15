@@ -1,0 +1,58 @@
+diff --git a/utils/export.py b/utils/export.py
+index 8100001..8100002 100644
+--- a/utils/export.py
++++ b/utils/export.py
+@@ -1,2 +1,4 @@
+ import zipfile
++with zipfile.ZipFile(upload) as archive:
++    archive.extractall("/srv/app/public")
+diff --git a/api/files.py b/api/files.py
+index 8100003..8100004 100644
+--- a/api/files.py
++++ b/api/files.py
+@@ -10,2 +10,3 @@
+ def download():
++    return send_file(os.path.join(UPLOADS, request.args["name"]))
+diff --git a/routes/download.js b/routes/download.js
+index 8100005..8100006 100644
+--- a/routes/download.js
++++ b/routes/download.js
+@@ -4,2 +4,4 @@
+ router.get("/file/:name", (req, res) => {
++  const p = path.join(UPLOADS, req.params.name);
++  res.sendFile(p);
+diff --git a/auth/hash.py b/auth/hash.py
+index 8100007..8100008 100644
+--- a/auth/hash.py
++++ b/auth/hash.py
+@@ -2,2 +2,3 @@
+ def set_password(user, password):
++    user.password_hash = hashlib.md5(password).hexdigest()
+diff --git a/auth/token.py b/auth/token.py
+index 8100009..810000a 100644
+--- a/auth/token.py
++++ b/auth/token.py
+@@ -2,2 +2,3 @@
+ def issue_reset(user_id):
++    reset_token = random.randint(100000, 999999)
+diff --git a/routes/oauth.js b/routes/oauth.js
+index 810000b..810000c 100644
+--- a/routes/oauth.js
++++ b/routes/oauth.js
+@@ -3,2 +3,3 @@
+ app.get("/back", (req, res) => {
++  res.redirect(req.query.next);
+diff --git a/auth/jwt.py b/auth/jwt.py
+index 810000d..810000e 100644
+--- a/auth/jwt.py
++++ b/auth/jwt.py
+@@ -5,2 +5,3 @@
+ def session_claims(token):
++    claims = jwt.decode(token, SECRET, options={"verify_signature": False})
+diff --git a/web/app.py b/web/app.py
+index 810000f..8100010 100644
+--- a/web/app.py
++++ b/web/app.py
+@@ -9,2 +9,3 @@
+ def create_app():
++    app.run(host="0.0.0.0", debug=True)
