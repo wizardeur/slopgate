@@ -1235,6 +1235,137 @@ check('shields: SG-SEC-007 clears js-yaml 4 load but keeps unsafe schemas and Py
   assert.deepStrictEqual(rules(evaluate(py('cfg = yaml.safe_load(open(p))'))), []);
 });
 
+// ========= closure controls: the four defects, and the false-positive set ====
+// The fixes above are only correct if they clear false positives without
+// clearing a true positive. These checks pin that on the shipped CLI, and pin
+// defect 3 against real git instead of a mocked command runner.
+
+check('resolveDiff: a real depth-2 shallow clone with an unreachable merge base fails closed, never HEAD~1', () => {
+  // Defect 3, reproduced with real git. On a depth >= 2 checkout whose merge
+  // base lies outside the clone, `origin/<base>` does not exist (a fetch of a
+  // bare branch name writes FETCH_HEAD only, it does not create the
+  // remote-tracking ref), while `git diff HEAD~1` still succeeds over the LAST
+  // COMMIT. The old resolver returned that partial range as if it were the
+  // pull request: a branch whose true merge-base diff carried two defects was
+  // reported as one. Escaping the window must never be a lucky failure of the
+  // fixture, so every precondition below is asserted first.
+  const fsx = require('fs');
+  const osx = require('os');
+  const { execSync } = require('child_process');
+  const env = { ...process.env, NODE_OPTIONS: '' };
+  const base = fsx.mkdtempSync(path.join(osx.tmpdir(), 'sg-shallow-'));
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf-8', env });
+  const origin = path.join(base, 'origin');
+  fsx.mkdirSync(origin);
+  assert.strictEqual(git(origin, 'init', '-q', '-b', 'main').status, 0);
+  git(origin, 'config', 'user.email', 'gate@example.invalid');
+  git(origin, 'config', 'user.name', 'gate');
+  fsx.writeFileSync(path.join(origin, 'app.js'), 'const a = 1;\n');
+  git(origin, 'add', '-A');
+  git(origin, 'commit', '-qm', 'm1');
+  fsx.writeFileSync(path.join(origin, 'app.js'), 'const a = 2;\n');
+  git(origin, 'commit', '-qam', 'm2');
+  git(origin, 'checkout', '-q', '-b', 'feature', 'HEAD~1');
+  fsx.writeFileSync(path.join(origin, 'conf.py'), 'API_KEY = "9f8c1d2b3a4e5f60718293a4b5c6d7e8"\n');
+  git(origin, 'add', '-A');
+  git(origin, 'commit', '-qm', 'f1');
+  fsx.writeFileSync(path.join(origin, 'conf2.py'), 'DB_SECRET = "a1b2c3d4e5f60718293a4b5c6d7e8f9"\n');
+  git(origin, 'add', '-A');
+  git(origin, 'commit', '-qm', 'f2');
+
+  // file:// is required: a plain local path clone ignores --depth.
+  const clone = path.join(base, 'clone');
+  const cloned = git(base, 'clone', '--quiet', '--depth=2', '--branch', 'feature', `file://${origin}`, clone);
+  assert.strictEqual(cloned.status, 0, cloned.stderr);
+  assert.strictEqual(git(clone, 'rev-parse', '--verify', '-q', 'HEAD~1').status, 0, 'HEAD~1 must exist at depth 2');
+  assert.notStrictEqual(git(clone, 'rev-parse', '--verify', '-q', 'origin/main').status, 0, 'origin/main must be absent');
+  assert.ok(git(clone, 'diff', 'HEAD~1').stdout.trim().length > 0, 'the partial range must be non-empty');
+
+  const run = (cmd) => execSync(cmd, { cwd: clone, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+  assert.strictEqual(resolveDiff('main', run), null);
+
+  // And the CLI stops the gate with the fix, instead of scanning that range.
+  const res = spawnSync('node', [path.join(ROOT, 'bin', 'slopgate.js'), '--base', 'main'], {
+    cwd: clone,
+    encoding: 'utf-8',
+    env,
+  });
+  const out = `${res.stdout || ''}${res.stderr || ''}`;
+  assert.strictEqual(res.status, 1, out);
+  assert.ok(out.includes('[slopgate] FATAL'), out);
+  assert.ok(out.includes('fetch-depth: 0'), out);
+  assert.ok(out.includes('refs/remotes/origin/main'), out);
+  fsx.rmSync(base, { recursive: true, force: true });
+});
+
+check('cli controls: four real hits block with their rule id, parameterized SQL and clean code stay green', () => {
+  // Positive controls: each is a defect this closure touched or must not touch,
+  // and each must still red with its own rule id through the shipped CLI.
+  // Negative controls: the four parameterized SQL shapes measured as false
+  // positives, plus clean source, must exit 0.
+  const fsx = require('fs');
+  const osx = require('os');
+  const env = { ...process.env, NODE_OPTIONS: '' };
+  const bin = path.join(ROOT, 'bin', 'slopgate.js');
+  const dir = fsx.mkdtempSync(path.join(osx.tmpdir(), 'sg-controls-'));
+  const py = (body) => `import sqlite3\n\n\ndef q(conn, name, uid):\n${body}\n`;
+  const newFileDiff = (file, content) => {
+    const lines = content.replace(/\n$/, '').split('\n');
+    return (
+      `diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n` +
+      `@@ -0,0 +1,${lines.length} @@\n` +
+      lines.map((l) => `+${l}`).join('\n') +
+      '\n'
+    );
+  };
+  const runCase = (file, content) => {
+    for (const f of fsx.readdirSync(dir, { recursive: true })) {
+      const p = path.join(dir, String(f));
+      if (fsx.existsSync(p) && fsx.statSync(p).isFile()) fsx.rmSync(p, { force: true });
+    }
+    const target = path.join(dir, file);
+    fsx.mkdirSync(path.dirname(target), { recursive: true });
+    fsx.writeFileSync(target, content);
+    const diffPath = path.join(dir, 'case.diff');
+    fsx.writeFileSync(diffPath, newFileDiff(file, content));
+    const res = spawnSync('node', [bin, '--json', '--diff', diffPath], { cwd: dir, encoding: 'utf-8', env });
+    let json = null;
+    try {
+      json = JSON.parse(res.stdout.toString());
+    } catch {
+      json = null;
+    }
+    return { status: res.status, json, out: `${res.stdout || ''}${res.stderr || ''}` };
+  };
+
+  const red = [
+    ['python f-string SQL', 'db.py', py('    return conn.execute(f"SELECT * FROM users WHERE id = {uid}")'), 'SG-SEC-001'],
+    ['credential literal', 'conf.py', 'API_KEY = "9f8c1d2b3a4e5f60718293a4b5c6d7e8"\n', 'SG-SEC-002'],
+    ['action on a branch', '.github/workflows/ci.yml', 'name: ci\njobs:\n  t:\n    steps:\n      - uses: actions/checkout@main\n', 'SG-SEC-011'],
+    ['hidden U+202E', 'src/hidden.js', 'const s = "a\u202Eb";\nmodule.exports = s;\n', 'SG-SEC-010'],
+  ];
+  for (const [name, file, content, rule] of red) {
+    const r = runCase(file, content);
+    assert.strictEqual(r.status, 1, `${name}: expected exit 1\n${r.out}`);
+    const ids = r.json ? r.json.securityFindings.map((f) => f.ruleId) : [];
+    assert.ok(ids.includes(rule), `${name}: expected ${rule}, got ${ids.join(',') || 'none'}`);
+  }
+
+  const green = [
+    ['bound params ?, tuple', 'db.py', py('    return conn.execute("SELECT * FROM users WHERE name = ?", (name,))')],
+    ['bound params %s, tuple', 'db.py', py('    return conn.execute("SELECT * FROM users WHERE name = %s", (name,))')],
+    ['bound params :name, dict', 'db.py', py('    return conn.execute("SELECT * FROM users WHERE name = :name", {"name": name})')],
+    ['bound params ?, list', 'db.py', py('    return conn.execute("SELECT * FROM users WHERE name = ?", [name])')],
+    ['clean source', 'ok.py', 'def add(a, b):\n    return a + b\n'],
+  ];
+  for (const [name, file, content] of green) {
+    const r = runCase(file, content);
+    const ids = r.json ? r.json.securityFindings.map((f) => `${f.ruleId}@${f.file}`) : ['<no json>'];
+    assert.strictEqual(r.status, 0, `${name}: expected exit 0, got ${r.status} with ${ids.join(',')}\n${r.out}`);
+  }
+  fsx.rmSync(dir, { recursive: true, force: true });
+});
+
 fs.rmSync(v18, { recursive: true, force: true });
 
 console.log(`\n${passed} checks passed${process.exitCode ? ' (with failures)' : ''}`);

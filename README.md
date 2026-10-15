@@ -2,7 +2,7 @@
 
 A deterministic pull-request gate. It reviews the changed lines of a PR for AI-generated slop and for 22 CWE-mapped classes of security defects, verifies whether findings sit on a reachable path from an entrypoint to a dangerous sink, and posts a single self-updating verdict comment. Runs as a GitHub Action or a local CLI.
 
-No LLM, no network calls, no code leaves the runner. Zero runtime dependencies; Node >= 20 and an optional `python3` (Python AST analysis). 91 checks pass via `npm test`.
+No LLM calls and no telemetry: nothing about your code leaves the runner. The only remote operation is the `git fetch` of the base ref when it is missing locally. Zero runtime dependencies; Node >= 20 and an optional `python3` (Python AST analysis). 93 checks pass via `npm test`.
 
 ## What it checks
 
@@ -41,8 +41,7 @@ Two rules state what they cover exactly, instead of implying more than they chec
 
 **SG-SEC-011** flags references that move on their own: a branch, `@latest`, a wildcard range, a git ref over plain HTTP. A version tag is a released version rather than a floating ref, so a tag pin is not a hit by default; a tag is still mutable, but the gate can only read the ref text. Set `"requireShaPins": true` in `.slopgate.json` to also require a full 40-character commit SHA for `uses:` references: with it on, a tag pin or a branch ref both block, and a full SHA or a local (`./path`) action never does. It changes nothing else: container images and package ranges keep their previous matching.
 
-**SG-SEC-007** treats `yaml.load` per language, because its safety is a language fact. In JS (js-yaml >= 4, and the `yaml` package) parsing uses a safe schema that rejects `!!js/function` and the other JS types, so a bare JS `yaml.load` is not flagged; an explicitly full or unsafe schema still is. In Python, `yaml.load` without a `Loader` is unsafe at every version and is flagged. `yaml.safe_load`, `Loader=SafeLoader` and `Loader=FullLoader` are accepted opt-outs in both.
-
+**SG-SEC-007** treats `yaml.load` per language, because its safety is a language fact. In JS, `yaml.load` from js-yaml >= 4 parses with a safe schema: measured on js-yaml 4.3.2, `yaml.load("!!js/function ...")` throws `unknown tag`, because the default schema carries no `js/` types, so a bare JS `yaml.load` is not flagged. The version matters and the gate cannot read it: measured on js-yaml 3.15.2 the same payload returns a function, so a repository pinned below js-yaml 4 loses this JS detection. An explicitly full or unsafe schema (`FULL_SCHEMA`, `DEFAULT_FULL_SCHEMA`, `yaml.full_load`, `!!js/`) is flagged on every version. In Python, `yaml.load` without a `Loader` is unsafe at every version and is flagged. `yaml.safe_load`, `Loader=SafeLoader` and `Loader=FullLoader` are accepted opt-outs in both.
 
 **AST analyzers**: real syntax trees via Python's stdlib `ast` and a vendored, pinned `@babel/parser` (JS/TS/TSX). They provide syntax-error gates with exact lines, higher-precision versions of several shields, and one-hop taint rules for Python and PHP (including cross-line and top-level superglobal flows). In Python, a tainted value handed to a DB driver as a bind parameter is not a sink: only the query text is.
 
@@ -110,7 +109,7 @@ Any repository, public or private, can reference the action directly once this r
 ## Development
 
 ```sh
-npm test        # 91 checks, no test framework, no dependencies to install
+npm test        # 93 checks, no test framework, no dependencies to install
 ```
 
 The gate has zero runtime dependencies; the only third-party code in the tree is the vendored, version-pinned `@babel/parser` under `vendor/` (MIT). Layout: `src/shields.js` (the rules), `src/engine.js` (pipeline: normalization, suppression, severity gating, scoring), `src/diff.js` (fail-closed diff acquisition shared by both entry points), `src/analyzers/` (Python AST, JS/TS AST, import graph, external tools), `src/verdict.js` and `src/github.js` (verdict comment), `src/sarif.js`, `src/action.js` and `bin/slopgate.js` (entry points), `test/` (fixtures + checks).
