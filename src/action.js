@@ -34,7 +34,7 @@ function resolveDiff(baseBranch, run = sh) {
     // Shallow clone without the base ref: fetch just enough to diff.
     try {
       run(`git fetch origin ${baseBranch} --depth=200`);
-    } catch { // slopgate-ignore — best-effort: the retry below fails closed
+    } catch { // slopgate-ignore: best-effort: the retry below fails closed
     }
     diff = attempt(`git diff origin/${baseBranch}...HEAD`);
   }
@@ -44,7 +44,7 @@ function resolveDiff(baseBranch, run = sh) {
 }
 
 // Auto-polish: run the repository's own linters when config is present. Purely
-// advisory — failures are logged, never gate the verdict.
+// advisory: failures are logged, never gate the verdict.
 function autoPolish(enabled) {
   if (!enabled) return;
   try {
@@ -79,9 +79,9 @@ async function run() {
     const msg =
       '[slopgate] FATAL: cannot compute a diff against the base branch. ' +
       'Use actions/checkout with fetch-depth: 0 (or ensure the base ref exists). ' +
-      'Failing closed — an unscannable diff must not pass the gate.';
+      'Failing closed: an unscannable diff must not pass the gate.';
     console.error(msg);
-    gh.writeSummary(`## :shield: SlopGate — gate failed closed\n\n${msg}`);
+    gh.writeSummary(`## :shield: SlopGate: gate failed closed\n\n${msg}`);
     process.exit(1);
   }
 
@@ -108,7 +108,7 @@ async function run() {
   try {
     const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf-8'));
     prNumber = event.pull_request?.number || event.number || null;
-  } catch { // slopgate-ignore — best-effort: outside a pull_request event there is no PR to comment on
+  } catch { // slopgate-ignore: best-effort: outside a pull_request event there is no PR to comment on
   }
 
   // Action outputs.

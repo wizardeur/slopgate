@@ -1,9 +1,9 @@
-// Bundled JS/TS AST analyzer — real syntax trees via the vendored
+// Bundled JS/TS AST analyzer: real syntax trees via the vendored
 // @babel/parser (see vendor/README.md; falls back to the consumer repo's
 // own copy when present). Mirrors python-ast.js:
 //
-//   SG-AST-002  JS/TS file does not parse — instant block, any file
-//   SG-SEC-005  empty catch blocks — exact, via AST (supersedes regex)
+//   SG-AST-002  JS/TS file does not parse: instant block, any file
+//   SG-SEC-005  empty catch blocks: exact, via AST (supersedes regex)
 //   SG-SEC-012  while(true) with no break reachable in THIS loop body
 //   SG-SEC-004  eval(...) / new Function(...) on non-literal input
 //
@@ -132,7 +132,7 @@ function extractJsSymbols(ast) {
       varTypes,
     });
   });
-  // calls walk skips nested function subtrees only via the guard above —
+  // calls walk skips nested function subtrees only via the guard above:
   // dedupe per kind while preserving order.
   return fns;
 }
@@ -142,7 +142,7 @@ function ownBreak(loopNode) {
   walk(loopNode.body, (n, parent) => {
     if (found) return;
     if (n.type === 'BreakStatement') {
-      // break belongs to the nearest enclosing loop — stop at nested loops
+      // break belongs to the nearest enclosing loop: stop at nested loops
       if (parent && (parent.type === 'WhileStatement' || parent.type === 'DoWhileStatement' || parent.type === 'ForStatement' || parent.type === 'ForOfStatement' || parent.type === 'ForInStatement') && parent !== loopNode) {
         return;
       }

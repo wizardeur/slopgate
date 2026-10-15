@@ -100,14 +100,14 @@ function renderVerdict(result, { repo, ciSummary = '' }) {
                 ? ':orange_circle: HIGH'
                 : ':yellow_circle: MEDIUM') + (f.advisory ? ' *(advisory)*' : '');
             const loc = `\`${f.file}${f.line ? ':' + f.line : ''}\`${f.approx ? ' *(approx)*' : ''}`;
-            return `| \`${f.ruleId}\` | **\`${f.cwe}\`** | ${sev} | ${loc} | **${f.title}** — *${f.remediation}* |`;
+            return `| \`${f.ruleId}\` | **\`${f.cwe}\`** | ${sev} | ${loc} | **${f.title}**: *${f.remediation}* |`;
           })
           .join('\n') +
         '\n'
       : '';
 
   return `${VERDICT_MARKER}
-## :shield: SlopGate Security Audit · ${isGreen ? 'PASSED (Green)' : 'BLOCKED — ACTION REQUIRED'}
+## :shield: SlopGate Security Audit · ${isGreen ? 'PASSED (Green)' : 'BLOCKED: ACTION REQUIRED'}
 
 > Deterministic PR gatekeeper: Hygiene checks, 22 CWE-mapped security shields, reachability analysis. No LLM involved.
 ${analysisSection(result)}
@@ -150,13 +150,13 @@ function renderCiSummary({ classification, passCount, gatedCount, flakeCount, de
 }
 
 // Analysis-depth section: shown whenever any analyzer module ran. Explicitly
-// says "regex" when no analyzer was available — never silently degrades.
+// says "regex" when no analyzer was available: never silently degrades.
 function analysisSection(result) {
   const a = result.analysis;
   if (!a) return '';
   const rows = a.ran
     .map((r) => {
-      const status = r.available ? ':white_check_mark: ran' : `:grey_question: unavailable${r.error ? ` — ${r.error}` : ''}`;
+      const status = r.available ? ':white_check_mark: ran' : `:grey_question: unavailable${r.error ? `: ${r.error}` : ''}`;
       return `| \`${r.id}\` | ${status} | ${r.findings} |`;
     })
     .join('\n');

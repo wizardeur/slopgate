@@ -1,12 +1,11 @@
 // External analyzer modules: wrap any repo-relative check tool that signals
-// problems via exit code — pymap --check (Python imports), jsmap --check
-// (JS/TS imports), codemap --check (PHP methods), tsc --noEmit, php -l, ...
+// problems via exit code (tsc --noEmit, php -l, a custom gate script, ...).
 //
 // Config (in .slopgate.json):
 //   "analyzers": {
 //     "external": [
-//       { "id": "jsmap",
-//         "cmd": "node bin/jsmap --check",
+//       { "id": "php-lint",
+//         "cmd": "php -l {file}",
 //         "when": "package.json",      // optional gate: only run if this file exists
 //         "severity": "HIGH",          // default HIGH
 //         "timeoutMs": 60000 }
@@ -44,7 +43,7 @@ function runExternalAnalyzers(ext, { repoRoot = process.cwd() } = {}) {
   });
 
   if (res.error) {
-    // ETIMEDOUT / ENOENT: optional tool unavailable — degrade, don't fail.
+    // ETIMEDOUT / ENOENT mean the optional tool is unavailable; degrade, don't fail.
     return { available: false, error: res.error.message };
   }
   if (res.status === 0) return { available: true, findings: [] };

@@ -1,11 +1,11 @@
-// Import-graph module (v1.3): builds a repo-wide local import graph and uses
-// it for REAL reachability — "this changed file is imported by an entrypoint
-// and transitively imports a persistence sink" — instead of the path-name
-// heuristics. Falls back gracefully: unavailable / empty / foreign-repo
-// graphs leave the heuristic in charge and say so.
+// Import-graph module: builds a repo-wide local import graph and uses it
+// for real reachability ("this changed file is imported by an entrypoint
+// and transitively imports a persistence sink", not path-name heuristics).
+// Falls back gracefully: unavailable, empty or foreign-repo graphs leave
+// the heuristic in charge; the verdict reports the analysis depth either way.
 //
 // Sources: .py via stdlib-AST (py-imports.js), .js/.ts/.jsx/.tsx/.mjs/.cjs via
-// a local-only import/require scanner (jsmap's pattern set), .php via
+// a local-only import/require scanner, .php via
 // require/include path literals (__DIR__, plugin_dir_path(__FILE__)) plus
 // composer.json psr-4 `use` resolution. Entry/sink roles per language.
 const fs = require('fs');
@@ -59,7 +59,7 @@ function listSourceFiles(repoRoot, config) {
 // Resolve a JS import specifier relative to the importing file. Returns the
 // existing local file, or null.
 function resolveJsSpec(repoRoot, fromRel, spec) {
-  if (!spec || !spec.startsWith('.')) return null; // external / alias — not a local edge
+  if (!spec || !spec.startsWith('.')) return null; // external / alias: not a local edge
   const base = path.resolve(path.dirname(path.join(repoRoot, fromRel)), spec);
   const candidates = [
     base,
@@ -75,7 +75,7 @@ function resolveJsSpec(repoRoot, fromRel, spec) {
   for (const c of candidates) {
     try {
       if (fs.statSync(c).isFile()) return path.relative(repoRoot, c);
-    } catch { // slopgate-ignore — optional candidate extension
+    } catch { // slopgate-ignore: optional candidate extension
       /* best-effort: candidate extension doesn't exist, try the next one */
     }
   }
@@ -155,7 +155,7 @@ function scanPhpImports(repoRoot, rel, psr4) {
           edges.add(path.relative(repoRoot, candidate));
           break;
         }
-      } catch { // slopgate-ignore — optional include path
+      } catch { // slopgate-ignore: optional include path
         /* best-effort: candidate path doesn't exist, try the next one */
       }
     }
@@ -171,7 +171,7 @@ function scanPhpImports(repoRoot, rel, psr4) {
     const relPath = `${match.dir}/${remainder.replace(/\\/g, '/')}.php`;
     try {
       if (fs.statSync(path.join(repoRoot, relPath)).isFile()) edges.add(relPath);
-    } catch { // slopgate-ignore — optional psr-4 resolution
+    } catch { // slopgate-ignore: optional psr-4 resolution
       /* best-effort: psr-4 mapping didn't resolve to an existing file */
     }
   }
@@ -184,7 +184,7 @@ const PHP_ENTRYPOINT = /(?:Plugin|Theme) Name:\s*\S/i;
 // PHP symbols via regex spans (no zero-dep parser exists): functions/methods
 // with brace-counted line ranges, typed call edges within the span, class
 // property types, and add_action/add_filter callback registrations as
-// entrypoint symbols (WordPress's route concept — both `[ $this, 'x' ]` and
+// entrypoint symbols (WordPress's route concept: both `[ $this, 'x' ]` and
 // the array( $this, 'x' ) long syntax WP coding style mandates). Best-effort
 // by design; documented.
 const PHP_RESERVED = new Set([
@@ -222,7 +222,7 @@ function phpSinkCwe(line) {
   return PHP_TAINT_SINK_CWE[sink] || 'CWE-20';
 }
 
-// Returns { functions, taintFindings, meta } — meta carries namespace, use
+// Returns { functions, taintFindings, meta }: meta carries namespace, use
 // aliases and class property types for cross-file symbol resolution.
 function extractPhpSymbols(content) {
   const lines = content.split('\n');
@@ -250,7 +250,7 @@ function extractPhpSymbols(content) {
     if (cm) className = cm[1];
 
     // Typed property declarations (visibility + type + $name + ;). Promoted
-    // constructor parameters are handled separately below — they end the
+    // constructor parameters are handled separately below: they end the
     // parameter list, not with a semicolon.
     const pm = /(?:^|\s)(?:public|private|protected)\s+(?:static\s+)?(?:readonly\s+)?\??([\w\\]+)\s+\$(\w+)\s*;/.exec(line);
     if (pm && className) {
@@ -351,7 +351,7 @@ function extractPhpSymbols(content) {
   }
 
   // File-scope pass: WordPress plugins wire hooks and guard includes at
-  // top level, where no function span exists — scan only the uncovered lines
+  // top level, where no function span exists: scan only the uncovered lines
   // so span findings never double-report.
   const inSpan = (n) => out.some((fn) => n >= fn.line && n <= fn.end);
   taintScan(
@@ -495,8 +495,8 @@ function buildImportGraph(repoRoot, config, options = {}) {
           functions,
           js: { importNames },
         });
-      } catch { // slopgate-ignore — regex scanner still provides edges
-        // unparseable per the AST — SG-AST-002 (changed files) reports it;
+      } catch { // slopgate-ignore: regex scanner still provides edges
+        // unparseable per the AST: SG-AST-002 (changed files) reports it;
         // the regex import scanner still provides edges below.
       }
     }

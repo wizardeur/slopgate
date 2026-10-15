@@ -137,8 +137,8 @@ check('hygiene: control characters detected', () => {
 });
 
 check('hygiene: multi-char shell escapes flagged, regex/escape sequences exempt', () => {
-  assert.ok(checkHygiene('make\\install').some((i) => i.includes('shell escaping'))); // slopgate-ignore — intentional artifact fixture
-  assert.ok(checkHygiene('app\\continue').some((i) => i.includes('shell escaping'))); // slopgate-ignore — intentional artifact fixture
+  assert.ok(checkHygiene('make\\install').some((i) => i.includes('shell escaping'))); // slopgate-ignore: intentional artifact fixture
+  assert.ok(checkHygiene('app\\continue').some((i) => i.includes('shell escaping'))); // slopgate-ignore: intentional artifact fixture
   assert.strictEqual(checkHygiene("WHERE option_name LIKE '\\_transient\\_wsu\\_cf\\_rate\\_%'").length, 0);
   assert.strictEqual(checkHygiene('const re = /\\b(?:foo|bar)\\s+/;').length, 0);
   assert.strictEqual(checkHygiene('const s = "line one\\nline two";').length, 0);
@@ -969,7 +969,7 @@ check('v1.8: hook entrypoint reaches LFI sink via symbol chain', () => {
 });
 
 check('v1.8: slopgate-ignore on a pre-existing line suppresses AST findings (whole-content registry)', () => {
-  const marked = 'function a() {\n  try { r(); } catch (e) {} // slopgate-ignore — legacy swallow\n}\n\nfunction b() {\n  return 1;\n}\n';
+  const marked = 'function a() {\n  try { r(); } catch (e) {} // slopgate-ignore: legacy swallow\n}\n\nfunction b() {\n  return 1;\n}\n';
   const unmarked = 'function a() {\n  try { r(); } catch (e) {}\n}\n\nfunction b() {\n  return 1;\n}\n';
   // The diff only adds a line inside b(); the catch is pre-existing context
   // the AST pass still reads because it scans whole changed files.

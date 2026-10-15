@@ -42,11 +42,11 @@ function evaluate(diffText, options = {}) {
 
   const files = parseDiff(diffText);
   // Files exempt from scanning (lockfiles, vendored code, config-ignored) are
-  // excluded from hygiene/marker text too — a 500KB minified vendor bundle
+  // excluded from hygiene/marker text too: a 500KB minified vendor bundle
   // must not trip the control-character check.
   const isSkippedFile = (p) =>
     GENERATED_FILE.test(p) || (config.ignorePaths || []).some((rx) => rx && rx.test(p));
-  // Inline-ignored lines are excluded from hygiene/marker scanning as well —
+  // Inline-ignored lines are excluded from hygiene/marker scanning as well:
   // the comment means "do not scan this line", not merely "no shields".
   const addedTextJoined = files
     .filter((f) => !isSkippedFile(f.path))
@@ -211,8 +211,8 @@ function evaluate(diffText, options = {}) {
   }
 
   // Markers on pre-existing lines must suppress too: the AST passes read
-  // whole changed files, so an ignore comment anywhere in a changed file —
-  // not just on diff-added lines — has to register its line number.
+  // whole changed files, so an ignore comment anywhere in a changed file,
+  // not just on diff-added lines, has to register its line number.
   // (Surfaced by dogfood: touching import-graph.js flagged best-effort
   // catches that had been sitting quietly in the same file for versions.)
   const wholeSources = options.files?.length
@@ -233,7 +233,7 @@ function evaluate(diffText, options = {}) {
   }
 
   // Merge policy (documented in README):
-  //  - AST findings are ADDED (union) — they catch shapes the regexes miss;
+  //  - AST findings are ADDED (union): they catch shapes the regexes miss;
   //  - on files the python-ast analyzer processed, regex `while-true`
   //    findings are dropped (AST break-analysis is authoritative);
   //  - regex `approx` findings are dropped when the AST has a precise one
@@ -261,7 +261,7 @@ function evaluate(diffText, options = {}) {
     if (f.approx && astPairs.has(`${f.ruleId}:${f.file}`)) return false;
     return true;
   });
-  // Inline ignores suppress AST/graph findings at that line too — the comment
+  // Inline ignores suppress AST/graph findings at that line too: the comment
   // means "do not report here", whatever layer is looking.
   const lineIgnored = (f) => f.line != null && (ignoredLines.get(f.file)?.has(f.line) || false);
   // Dedupe identical rule+file+line hits across layers (regex first, then AST

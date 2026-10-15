@@ -38,7 +38,7 @@ function buildSarif(result) {
     results.push({
       ruleId: f.ruleId,
       level: levelFor(f),
-      message: { text: `${f.title} — ${f.remediation}` },
+      message: { text: `${f.title}: ${f.remediation}` },
       locations: [
         {
           physicalLocation: {

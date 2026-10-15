@@ -6,9 +6,9 @@ No LLM, no network calls, no code leaves the runner. Zero runtime dependencies; 
 
 ## What it checks
 
-**Hygiene** — conversational filler, do-not-merge markers, hidden bidirectional/zero-width Unicode, stray control characters. Added lines only, never context.
+**Hygiene**: conversational filler, do-not-merge markers, hidden bidirectional/zero-width Unicode, stray control characters. Added lines only, never context.
 
-**Security shields** — per-line and multi-line patterns, anchored on request objects/superglobals or security-context keywords; test files exempt.
+**Security shields**: per-line and multi-line patterns, anchored on request objects/superglobals or security-context keywords; test files exempt.
 
 | Rule | CWE | Detects |
 | --- | --- | --- |
@@ -35,11 +35,11 @@ No LLM, no network calls, no code leaves the runner. Zero runtime dependencies; 
 | SG-SEC-021 | 434 | Upload configuration without file-type validation |
 | SG-SEC-022 | 942 | Wildcard host/origin allowlists in server configuration |
 
-**AST analyzers** — real syntax trees via Python's stdlib `ast` and a vendored, pinned `@babel/parser` (JS/TS/TSX): syntax-error gates with exact lines, higher-precision versions of several shields, and one-hop taint rules for Python and PHP (including cross-line and top-level superglobal flows).
+**AST analyzers**: real syntax trees via Python's stdlib `ast` and a vendored, pinned `@babel/parser` (JS/TS/TSX). They provide syntax-error gates with exact lines, higher-precision versions of several shields, and one-hop taint rules for Python and PHP (including cross-line and top-level superglobal flows).
 
-**Import graph** — file- and symbol-level reachability across Python, JS/TS and PHP (composer psr-4, WordPress hooks as entrypoints). A finding on a path from a route or hook to a sink is reported as reachable; confined findings say so.
+**Import graph**: file- and symbol-level reachability across Python, JS/TS and PHP (composer psr-4, WordPress hooks as entrypoints). The verdict reports whether each finding sits on a path from a route or hook to a sink, or is confined.
 
-**CI triage** — separates real job defects from maintainer-gated jobs and upstream runner flakes.
+**CI triage**: separates real job defects from maintainer-gated jobs and upstream runner flakes.
 
 **SARIF 2.1.0** output via `--sarif` or the `sarif_file` input.
 
@@ -63,7 +63,7 @@ jobs:
           base_branch: main
 ```
 
-`fetch-depth: 0` is required: the gate diffs against the merge base and fails closed with instructions on a shallow checkout — it never passes vacuously. Pin the action to a tag or, for stricter supply-chain hygiene, a full commit SHA.
+`fetch-depth: 0` is required. The gate diffs against the merge base; on a shallow checkout it fails with setup instructions instead of reporting an empty diff. Pin the action to a tag or, for stricter supply-chain hygiene, a full commit SHA.
 
 Inputs: `base_branch`, `fail_on_slop`, `post_pr_comment`, `auto_close_slop`, `ci_diagnostics`, `auto_polish`, `min_block_severity`, `config_path`, `sarif_file`, `github_token`. Outputs: `slop_score`, `lines_reduced`, `invariants_verified`, `ci_classification`, `flaky_jobs_count`. The verdict comment is a single post that updates in place on every push to the PR.
 
@@ -89,11 +89,11 @@ git diff main...HEAD | node bin/slopgate.js # diff on stdin
 }
 ```
 
-`disable` removes rules; `ignorePaths` (globs) exempts paths from every layer; `minBlockSeverity` (LOW/MEDIUM/HIGH/CRITICAL) sets the blocking floor — findings below it are advisory. Inline `// slopgate-ignore` (or `#`, `/* */`, `<!-- -->` variants) suppresses every layer at that line, including AST and graph findings on pre-existing lines of changed files.
+`disable` removes rules; `ignorePaths` (globs) exempts paths from every layer; `minBlockSeverity` (LOW/MEDIUM/HIGH/CRITICAL) sets the blocking floor, and findings below it are advisory. Inline `// slopgate-ignore` (or `#`, `/* */`, `<!-- -->` variants) suppresses every layer at that line, including AST and graph findings on pre-existing lines of changed files.
 
 ## Vendoring (optional)
 
-Any repository — public or private — can reference the action directly once this repository is public. Vendor a copy instead if you want to pin the exact code you run and decouple from upstream releases: copy the repository under `tools/slopgate/`, reference it with `uses: ./tools/slopgate`, exempt the copy via `ignorePaths`, and re-sync when you adopt a new version.
+Any repository, public or private, can reference the action directly once this repository is public. Vendor a copy instead if you want to pin the exact code you run and decouple from upstream releases: copy the repository under `tools/slopgate/`, reference it with `uses: ./tools/slopgate`, exempt the copy via `ignorePaths`, and re-sync when you adopt a new version.
 
 ## Development
 
@@ -101,7 +101,7 @@ Any repository — public or private — can reference the action directly once 
 npm test        # 84 checks, no test framework, no dependencies to install
 ```
 
-Zero runtime dependencies is a design rule, not an accident; the only third-party code in the tree is the vendored, version-pinned `@babel/parser` under `vendor/` (MIT). Layout: `src/shields.js` (the rules), `src/engine.js` (pipeline — normalization, suppression, severity gating, scoring), `src/analyzers/` (Python AST, JS/TS AST, import graph, external tools), `src/verdict.js` and `src/github.js` (verdict comment), `src/sarif.js`, `src/action.js` and `bin/slopgate.js` (entry points), `test/` (fixtures + checks).
+The gate has zero runtime dependencies; the only third-party code in the tree is the vendored, version-pinned `@babel/parser` under `vendor/` (MIT). Layout: `src/shields.js` (the rules), `src/engine.js` (pipeline: normalization, suppression, severity gating, scoring), `src/analyzers/` (Python AST, JS/TS AST, import graph, external tools), `src/verdict.js` and `src/github.js` (verdict comment), `src/sarif.js`, `src/action.js` and `bin/slopgate.js` (entry points), `test/` (fixtures + checks).
 
 ## License
 

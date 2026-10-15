@@ -1,17 +1,17 @@
-// Bundled Python AST analyzer — the reference implementation of the module API.
+// Bundled Python AST analyzer: the reference implementation of the module API.
 //
-// Spawns python3 (stdlib only, same zero-dependency stance as pymap) and sends
+// Spawns python3 (stdlib only) and sends
 // changed-file contents as JSON on stdin; receives findings as JSON on stdout.
 //
 // What it detects that the regex shields cannot, or only approximately:
-//   SG-AST-001  file does not parse (SyntaxError) — instant block
+//   SG-AST-001  file does not parse (SyntaxError): instant block
 //   SG-SEC-004  eval()/exec() on non-literals; subprocess/os.system shell
 //               execution via CALL NODES (shell=True keyword, any line layout)
-//   SG-SEC-005  exception handlers whose body is only pass/continue — exact,
+//   SG-SEC-005  exception handlers whose body is only pass/continue: exact,
 //               any form incl. `except Exception as e:` and multi-line
 //   SG-SEC-007  pickle/dill/marshal/shelve loads; yaml.load without a Loader kw
 //   SG-SEC-012  `while True` with NO break reachable in THIS loop's body
-//               (nested-loop breaks don't count — the regex same-line
+//               (nested-loop breaks don't count: the regex same-line
 //               heuristic both false-positives and false-negatives here)
 //   SG-SEC-001  SQL verbs in f-strings passed to execute/query(...) through
 //               call arguments, including one-hop `sql = f"..."` aliases
@@ -227,8 +227,8 @@ def analyze(path, src, is_test):
     # ---- SG-TAINT-001: one-hop user input -> dangerous sink ---------------
     # Deliberately shallow: a variable assigned from a request-ish expression
     # and later passed to a dangerous call, within one scope. Walk order is
-    # not source order, so an assignment after the sink can also taint it —
-    # acceptable for a tripwire (documented).
+    # not source order, so an assignment after the sink can also taint it:
+    # intentional and documented.
     TAINT_SOURCE_HINTS = ("args", "form", "GET", "POST", "values", "cookies", "headers", "json", "body", "query_params", "argv")
     TAINT_SINK_CWE = {"execute": "CWE-89", "executescript": "CWE-89", "query": "CWE-89", "raw": "CWE-89",
                       "eval": "CWE-94", "exec": "CWE-94", "system": "CWE-78", "popen": "CWE-78",

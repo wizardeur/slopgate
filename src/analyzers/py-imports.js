@@ -2,11 +2,11 @@
 // python3 script (stdlib only): file list in, per-file edges and symbols out.
 //
 // Per file:
-//   imports       — resolved local file imports (pymap-style dotted-module map
-//                   with src-layout prefixes: src/, backend/src/, lib/)
-//   namedImports  — name -> file ("from app.db import fetch_user")
-//   moduleImports — dotted module -> file ("import app.db", "from app import db")
-//   functions     — [{ name (Class.method-qualified), line, end, route, calls }]
+//   imports:       resolved local file imports (dotted-module map with
+//                  src-layout prefixes: src/, backend/src/, lib/)
+//   namedImports:  name -> file ("from app.db import fetch_user")
+//   moduleImports: dotted module -> file ("import app.db", "from app import db")
+//   functions:     [{ name (Class.method-qualified), line, end, route, calls }]
 //                   route = decorated with a get/post/put/delete/patch/route-ish
 //                   decorator; calls = raw call names/attrs, resolved by the
 //                   import graph on the JS side.
@@ -52,7 +52,7 @@ def decorator_route(dec):
     return bool(names & ROUTE_NAMES)
 
 def collect_calls(fn):
-    # walk statements only — decorators are attributes, not calls this
+    # walk statements only: decorators are attributes, not calls this
     # function makes (an @app.post decorator would otherwise add a phantom
     # "post" call edge)
     calls = []

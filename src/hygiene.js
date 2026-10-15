@@ -15,7 +15,7 @@ function checkHygiene(text) {
   const issues = [];
   if (!text) return issues;
 
-  // Raw non-printable control characters, except U+0004 (EOT) — the gettext
+  // Raw non-printable control characters, except U+0004 (EOT): the gettext
   // plural/msgctxt separator that i18n tooling legitimately embeds (found by
   // dogfooding on a real WP plugin's make-i18n-json.py).
   if (/[\x00-\x03\x05-\x08\x0B\x0C\x0E-\x1F]/.test(text)) {
@@ -24,9 +24,9 @@ function checkHygiene(text) {
 
   // Shell-escaping artifacts before words/identifiers. Legitimate shapes:
   // valid escape char (\n, \x41...), single-char regex class (\s \d \w),
-  // capitalized token (\Admin — PHP namespaces), underscore (\_transient —
+  // capitalized token (\Admin: PHP namespaces), underscore (\_transient:
   // SQL LIKE escapes, found by dogfooding on a real WP plugin).
-  // What remains — a backslash glued to a lowercase word — is the artifact
+  // What remains: a backslash glued to a lowercase word: is the artifact
   // this check hunts.
   const shellEscapes = text.match(/\\[a-zA-Z_0-9]+/g);
   if (shellEscapes) {
@@ -41,11 +41,8 @@ function checkHygiene(text) {
     }
   }
 
-  // Escaped backticks are deliberately not flagged.
-  // Removed after external dogfooding: it fired on intentional markdown
-  // escaping (CLAUDE.md) and on markdown-generating JS template literals
-  // (bin/jsmap) — it cannot distinguish artifact from intent and had
-  // negative value on real repositories.
+  // Escaped backticks are not flagged: a line-level check cannot tell an
+  // escaped backtick in prose from one inside a template literal.
 
   const lower = text.toLowerCase();
   for (const phrase of SLOP_PHRASES) {
