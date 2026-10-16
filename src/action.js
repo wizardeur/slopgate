@@ -11,37 +11,8 @@ const { evaluate } = require('./engine');
 const { classifyChecks } = require('./ci');
 const { renderVerdict, renderCiSummary } = require('./verdict');
 const { loadConfig } = require('./config');
+const { resolveDiff, diffFailureMessage } = require('./diff');
 const gh = require('./github');
-
-function sh(cmd) {
-  return execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
-}
-
-// Diff acquisition with fail-closed semantics: an uncomputable diff must
-// never degrade to an empty one (which always passes). A shallow checkout
-// that cannot produce a diff is the exact case this guards against.
-function resolveDiff(baseBranch, run = sh) {
-  const attempt = (cmd) => {
-    try {
-      const out = run(cmd);
-      return typeof out === 'string' && out.trim().length > 0 ? out : null;
-    } catch {
-      return null;
-    }
-  };
-  let diff = attempt(`git diff origin/${baseBranch}...HEAD`);
-  if (!diff) {
-    // Shallow clone without the base ref: fetch just enough to diff.
-    try {
-      run(`git fetch origin ${baseBranch} --depth=200`);
-    } catch { // slopgate-ignore: best-effort: the retry below fails closed
-    }
-    diff = attempt(`git diff origin/${baseBranch}...HEAD`);
-  }
-  if (!diff) diff = attempt('git diff HEAD~1');
-  if (!diff) diff = attempt('git diff HEAD');
-  return diff;
-}
 
 // Auto-polish: run the repository's own linters when config is present. Purely
 // advisory: failures are logged, never gate the verdict.
@@ -76,10 +47,7 @@ async function run() {
 
   const diff = resolveDiff(baseBranch);
   if (!diff) {
-    const msg =
-      '[slopgate] FATAL: cannot compute a diff against the base branch. ' +
-      'Use actions/checkout with fetch-depth: 0 (or ensure the base ref exists). ' +
-      'Failing closed: an unscannable diff must not pass the gate.';
+    const msg = diffFailureMessage(baseBranch);
     console.error(msg);
     gh.writeSummary(`## :shield: SlopGate: gate failed closed\n\n${msg}`);
     process.exit(1);
