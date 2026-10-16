@@ -261,6 +261,35 @@ function evaluate(diffText, options = {}) {
     if (f.approx && astPairs.has(`${f.ruleId}:${f.file}`)) return false;
     return true;
   });
+  // Inline ignores suppress findings at that line in EVERY layer - but the
+  // marker sits on a line of the CHECKED-OUT FILE, and a finding can anchor
+  // on a line the diff never shows. Field cases 2026-10-15/16: a tracker PR
+  // whose diff is only the workflow file, with the sink marker at a PHP line
+  // far from any hunk (suppression structurally dead for graph findings);
+  // and whole-file AST findings on pre-existing lines of changed files, where
+  // the patch text never contains the marker line. For every finding's file,
+  // read the whole file and collect its markers, so lineIgnored below sees
+  // what the author actually wrote. Diff-file markers were already collected
+  // above; re-scanning those files whole is idempotent.
+  const markerScanFiles = new Set();
+  for (const f of [...mergedFindings, ...analyzerFindings, ...graphFindings]) {
+    if (f.line != null && !ignoredLines.has(f.file)) markerScanFiles.add(f.file);
+  }
+  if (options.readFile) {
+    for (const mf of markerScanFiles) {
+      const markerContent = options.readFile(mf);
+      if (!markerContent) continue;
+      String(markerContent)
+        .split('\n')
+        .forEach((l, i) => {
+          if (INLINE_IGNORE.test(l.slice(0, LINE_CAP))) {
+            if (!ignoredLines.has(mf)) ignoredLines.set(mf, new Set());
+            ignoredLines.get(mf).add(i + 1);
+          }
+        });
+    }
+  }
+
   // Inline ignores suppress AST/graph findings at that line too: the comment
   // means "do not report here", whatever layer is looking.
   const lineIgnored = (f) => f.line != null && (ignoredLines.get(f.file)?.has(f.line) || false);
