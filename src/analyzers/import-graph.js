@@ -200,7 +200,6 @@ const PHP_HOOK =
 
 const PHP_TAINT_SINK_CWE = {
   query: 'CWE-89', get_row: 'CWE-89', get_results: 'CWE-89', get_var: 'CWE-89',
-  insert: 'CWE-89', update: 'CWE-89', delete: 'CWE-89', replace: 'CWE-89',
   mysqli_query: 'CWE-89', pg_query: 'CWE-89',
   shell_exec: 'CWE-78', exec: 'CWE-78', system: 'CWE-78', passthru: 'CWE-78',
   proc_open: 'CWE-78', popen: 'CWE-78', eval: 'CWE-94', assert: 'CWE-94',
@@ -211,6 +210,10 @@ const PHP_TAINT_SINK_CWE = {
   move_uploaded_file: 'CWE-434',
 };
 
+// $wpdb->prepare() i rodzina esc_* to eskapery/parametryzatory - nie socki
+// (pole 2026-10-15: wsu-returns, wsu-pan - FP na poprawnym kodzie wpdb).
+const PHP_WPDB_ESCAPERS = new Set(['prepare', 'esc_like', 'esc_sql', 'esc_query']);
+
 function phpSinkCwe(line) {
   const m =
     /\$wpdb\s*->\s*(\w+)|\b(mysqli_query|pg_query|shell_exec|exec|system|passthru|proc_open|popen|eval|assert|unserialize|curl_exec|file_get_contents|readfile|fopen|unlink|move_uploaded_file)\s*\(|\b(include|include_once|require|require_once)\b\(?\s*\$/i.exec(
@@ -218,7 +221,10 @@ function phpSinkCwe(line) {
     );
   if (!m) return null;
   const sink = (m[1] || m[2] || m[3]).toLowerCase();
-  if (sink === 'prepare') return null;
+  // prepare/esc_* to eskapery i parametryzatory; insert/update/delete/replace
+  // to safe-by-construction API wpdb (parametryzuje $data i $where wewnatrz).
+  if (sink === 'prepare' || PHP_WPDB_ESCAPERS.has(sink)) return null;
+  if (!PHP_TAINT_SINK_CWE[sink] && m[1]) return null;
   return PHP_TAINT_SINK_CWE[sink] || 'CWE-20';
 }
 
@@ -320,12 +326,33 @@ function extractPhpSymbols(content) {
   // ---- SG-TAINT-002: superglobal into a sink within one method ------------
   // One hop, span-local: `$x = $_GET[...]` then a sink line mentioning $x,
   // or a superglobal directly inside the sink call.
+  // Sanitizers clear taint: assignment through a canonical WP sanitizer or a
+  // numeric cast produces a CLEAN variable. Reassignment through a sanitizer
+  // clears an existing taint too: `$x = intval($x);`
+  const PHP_TAINT_CLEAR =
+    /(\(\s*(?:int|integer|float|double|bool|boolean)\s*\)|\b(?:intval|absint|floatval|doubleval|sanitize_key|sanitize_text_field|sanitize_email|sanitize_title|sanitize_textarea_field|wp_validate_boolean)\s*\()/;
   const taintFindings = [];
   const taintScan = (entries, out) => {
     const tainted = new Set();
     for (const { n, text } of entries) {
-      if (/\$(\w+)\s*=\s*[^;\n]*\$_(?:GET|POST|REQUEST|COOKIE|SERVER|FILES)\b/.test(text)) {
-        tainted.add(text.match(/\$(\w+)\s*=\s*[^;\n]*\$_/)[1]);
+      // Sanitizers clear taint: assignment through a canonical WP sanitizer
+      // or a numeric cast produces a CLEAN variable (field case: an intval()
+      // assignment was tainted forever and the wpdb->update() sink line
+      // blocked every gate on correct code). Reassignment through a
+      // sanitizer clears an existing taint too: `$x = intval($x);`
+      const assign = text.match(
+        /\$(\w+)\s*=\s*[^;\n]*\$_(?:GET|POST|REQUEST|COOKIE|SERVER|FILES)\b/,
+      );
+      if (assign) {
+        if (PHP_TAINT_CLEAR.test(text)) tainted.delete(assign[1]);
+        else tainted.add(assign[1]);
+      }
+      for (const t of Array.from(tainted)) {
+        if (
+          new RegExp('\\$' + t + '\\s*=\\s*[^;\\n]*' + PHP_TAINT_CLEAR.source).test(text)
+        ) {
+          tainted.delete(t);
+        }
       }
       const cwe = phpSinkCwe(text);
       if (!cwe) continue;
@@ -338,6 +365,7 @@ function extractPhpSymbols(content) {
           severity: 'CRITICAL',
           title: 'PHP Superglobal Reaches Dangerous Sink (one hop)',
           line: n,
+          via: 'graph',
           remediation:
             'Sanitize and validate superglobal input (sanitize_key, absint, allowlists) before it reaches sinks; use parameterized queries.',
         });

@@ -1053,4 +1053,131 @@ check('v1.9 FP battery: allowlisted cors, filtered multer, trusted xml, pinned h
 
 fs.rmSync(v18, { recursive: true, force: true });
 
+
+// ---- v1.9.2: PHP taint FP-class (wpdb safe API + sanitizers) ----------------
+
+check('v1.9.2: intval assignment + wpdb->update sink = no finding (field FP)', () => {
+  const t = extractPhpSymbols(
+    "<?php\nadd_action('admin_post_save', 'h');\nfunction h() {\n  global $wpdb;\n  $tid = intval($_POST['tid'] ?? 0);\n  $wpdb->update($t, $d, array('id' => $tid));\n}\n",
+  );
+  assert.strictEqual(
+    t.taintFindings.filter((f) => f.ruleId === 'SG-TAINT-002').length,
+    0,
+    JSON.stringify(t.taintFindings),
+  );
+});
+
+check('v1.9.2: esc_like is an escaper, not a CWE-20 sink (field FP)', () => {
+  const t = extractPhpSymbols(
+    "<?php\n$params[] = '%' . $wpdb->esc_like($search) . '%';\n",
+  );
+  assert.strictEqual(
+    t.taintFindings.filter((f) => f.cwe === 'CWE-20').length,
+    0,
+    JSON.stringify(t.taintFindings),
+  );
+});
+
+check('v1.9.2: raw query with unsanitized tainted var still fires (control)', () => {
+  const t = extractPhpSymbols(
+    "<?php\n$tid = $_POST['tid'];\n$wpdb->query('SELECT * FROM t WHERE id = $tid');\n",
+  );
+  assert.ok(
+    t.taintFindings.some((f) => f.ruleId === 'SG-TAINT-002' && f.cwe === 'CWE-89'),
+    JSON.stringify(t.taintFindings),
+  );
+});
+
+check('v1.9.2: two-step clear ($x = $_POST; $x = intval($x)) = clean', () => {
+  const t = extractPhpSymbols(
+    "<?php\n$x = $_POST['x'];\n$x = intval($x);\n$wpdb->query('SELECT * FROM t WHERE id = $x');\n",
+  );
+  assert.strictEqual(t.taintFindings.length, 0, JSON.stringify(t.taintFindings));
+});
+
+// ---- v1.9.2: inline suppression reaches graph + whole-file AST findings ----
+
+const sgFix = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-fix-'));
+fs.writeFileSync(
+  path.join(sgFix, 'plugin.php'),
+  "<?php\nadd_action('admin_post_save', 'h');\nfunction h() {\n  global $wpdb;\n  $tid = $_POST['tid'];\n  $wpdb->query('SELECT * FROM t WHERE id = $tid'); // slopgate-ignore\n}\n",
+);
+fs.writeFileSync(
+  path.join(sgFix, 'nomark.php'),
+  "<?php\nadd_action('admin_post_save', 'h2');\nfunction h2() {\n  global $wpdb;\n  $tid = $_POST['tid'];\n  $wpdb->query('SELECT * FROM t WHERE id = $tid');\n}\n",
+);
+const sgFixDiff =
+  'diff --git a/.github/workflows/slopgate.yml b/.github/workflows/slopgate.yml\n--- a/.github/workflows/slopgate.yml\n+++ b/.github/workflows/slopgate.yml\n@@ -0,0 +1,2 @@\n+name: slopgate\n+on: pull_request\n';
+
+check('v1.9.2: inline marker suppresses graph taint on a file outside the diff', () => {
+  const res = evaluate(sgFixDiff, {
+    files: [
+      {
+        path: '.github/workflows/slopgate.yml',
+        content: 'name: slopgate\non: pull_request\n',
+      },
+    ],
+    readFile: (p) =>
+      p === 'plugin.php'
+        ? fs.readFileSync(path.join(sgFix, 'plugin.php'), 'utf-8')
+        : p === 'nomark.php'
+          ? fs.readFileSync(path.join(sgFix, 'nomark.php'), 'utf-8')
+          : null,
+    repoRoot: sgFix,
+  });
+  const taint = res.securityFindings.filter(
+    (f) => f.ruleId === 'SG-TAINT-002' && f.file === 'plugin.php',
+  );
+  assert.strictEqual(taint.length, 0, JSON.stringify(res.securityFindings));
+  const nomark = res.securityFindings.filter((f) => f.file === 'nomark.php');
+  assert.strictEqual(nomark.length, 1, JSON.stringify(res.securityFindings));
+});
+
+check('v1.9.2: without the marker the same shape still fires (control)', () => {
+  const res = evaluate(sgFixDiff, {
+    files: [
+      {
+        path: '.github/workflows/slopgate.yml',
+        content: 'name: slopgate\non: pull_request\n',
+      },
+    ],
+    readFile: (p) =>
+      p === 'nomark.php' ? fs.readFileSync(path.join(sgFix, 'nomark.php'), 'utf-8') : null,
+    repoRoot: sgFix,
+  });
+  const nomark = res.securityFindings.filter((f) => f.file === 'nomark.php');
+  assert.strictEqual(nomark.length, 1, JSON.stringify(res.securityFindings));
+});
+
+// ---- v1.9.2: whole-file AST shield consults markers in the catch span ------
+
+check('v1.9.2: marker in the catch span suppresses the AST shield', () => {
+  const diff =
+    'diff --git a/analyzer.js b/analyzer.js\n--- a/analyzer.js\n+++ b/analyzer.js\n@@ -10,1 +10,2 @@\n x\n';
+  const js =
+    'function f(p) {\n  let x;\n  try {\n    x = JSON.parse(p);\n  } catch {\n    // slopgate-ignore: best-effort probe, next candidate extension\n  }\n  return x;\n}\n';
+  const withMarker = evaluate(diff, {
+    files: [{ path: 'analyzer.js', content: js }],
+  });
+  assert.strictEqual(
+    withMarker.securityFindings.filter((f) => f.ruleId === 'SG-SEC-005').length,
+    0,
+    JSON.stringify(withMarker.securityFindings),
+  );
+});
+
+check('v1.9.2: same shape without the marker still fires (control)', () => {
+  const diff =
+    'diff --git a/analyzer.js b/analyzer.js\n--- a/analyzer.js\n+++ b/analyzer.js\n@@ -10,1 +10,2 @@\n x\n';
+  const js =
+    'function f(p) {\n  let x;\n  try {\n    x = JSON.parse(p);\n  } catch {\n    // best-effort probe, next candidate extension\n  }\n  return x;\n}\n';
+  const noMarker = evaluate(diff, {
+    files: [{ path: 'analyzer.js', content: js }],
+  });
+  const s5 = noMarker.securityFindings.filter((f) => f.ruleId === 'SG-SEC-005');
+  assert.strictEqual(s5.length, 1, JSON.stringify(noMarker.securityFindings));
+  assert.strictEqual(s5[0].via, 'ast');
+});
+
+
 console.log(`\n${passed} checks passed${process.exitCode ? ' (with failures)' : ''}`);
