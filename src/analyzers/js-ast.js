@@ -195,14 +195,26 @@ function analyzeJsFiles(files, { repoRoot } = {}) {
         if (spanLines.some((l) => /(?:#|\/\/|\/\*|<!--)\s*slopgate-ignore\b/.test(l))) {
           return;
         }
+        // A comment INSIDE the handler body is the author's reason at the
+        // site: a documented swallow. It stays reported at LOW - advisory
+        // under the default minBlockSeverity (MEDIUM) - instead of blocking.
+        // An explicit slopgate-ignore marker (checked above) suppresses the
+        // finding outright; a plain explanatory comment only demotes it.
+        // babel collects comments in ast.comments even with attachComment
+        // false, so this needs no parser-option change.
+        const documented = (ast.comments || []).some(
+          (c) => c.loc && c.loc.start.line >= node.body.loc.start.line && c.loc.end.line <= node.body.loc.end.line
+        );
         findings.push({
           ruleId: 'SG-SEC-005',
           cwe: 'CWE-390',
-          severity: 'MEDIUM',
+          severity: documented ? 'LOW' : 'MEDIUM',
           title: 'Silent Exception Swallowing (Empty Catch)',
           file: file.path,
           line: node.loc.start.line,
-          remediation: 'Log or propagate structured exceptions rather than silently masking failures.',
+          remediation: documented
+            ? 'Documented swallow: the handler carries the reason; advisory under the default block floor.'
+            : 'Log or propagate structured exceptions rather than silently masking failures.',
           via: 'ast',
         });
       }

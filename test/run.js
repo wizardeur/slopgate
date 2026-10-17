@@ -452,6 +452,32 @@ check('python-ast: multi-line except-pass caught at exact line', () => {
   assert.strictEqual(f.via, 'ast');
 });
 
+check('python-ast: SG-SEC-005 documented swallow (comment in handler) is LOW', () => {
+  const r = analyzePythonFiles([
+    {
+      path: 'd.py',
+      content: 'def h(fn):\n    try:\n        fn()\n    except Exception as e:\n        # already dead; nothing left to report to\n        pass\n    return None\n',
+      is_test: false,
+    },
+  ]);
+  const f = r.findings.find((x) => x.ruleId === 'SG-SEC-005');
+  assert.ok(f, JSON.stringify(r.findings));
+  assert.strictEqual(f.severity, 'LOW');
+});
+
+check('python-ast: SG-SEC-005 undocumented except-pass stays MEDIUM', () => {
+  const r = analyzePythonFiles([
+    {
+      path: 'u.py',
+      content: 'def h(fn):\n    try:\n        fn()\n    except Exception as e:\n        pass\n    return None\n',
+      is_test: false,
+    },
+  ]);
+  const f = r.findings.find((x) => x.ruleId === 'SG-SEC-005');
+  assert.ok(f, JSON.stringify(r.findings));
+  assert.strictEqual(f.severity, 'MEDIUM');
+});
+
 check('python-ast: eval on variable, multi-line shell=True, yaml.load, aliased f-string SQL', () => {
   const r = analyzePythonFiles(
     [
@@ -511,6 +537,21 @@ check('engine: AST except-pass replaces the regex approx finding (exact line kep
   assert.strictEqual(s5.length, 1, JSON.stringify(s5));
   assert.strictEqual(s5[0].via, 'ast');
   assert.strictEqual(s5[0].line, 4);
+});
+
+check('engine: a documented swallow is advisory and does not block the gate', () => {
+  const content = 'def h(fn):\n    try:\n        fn()\n    except Exception as e:\n        # already dead; nothing left to report to\n        pass\n    return None\n';
+  const diff =
+    'diff --git a/d.py b/d.py\n--- a/d.py\n+++ b/d.py\n@@ -1,2 +1,7 @@\n def h(fn):\n+    try:\n+        fn()\n+    except Exception as e:\n+        # already dead; nothing left to report to\n+        pass\n+    return None\n';
+  const res = evaluate(diff, {
+    files: [{ path: 'd.py', content }],
+  });
+  const s5 = res.securityFindings.find((f) => f.ruleId === 'SG-SEC-005');
+  assert.ok(s5, JSON.stringify(res.securityFindings));
+  assert.strictEqual(s5.severity, 'LOW');
+  assert.strictEqual(s5.advisory, true);
+  assert.strictEqual(res.blockingFindings.length, 0);
+  assert.strictEqual(res.isGreen, true);
 });
 
 check('engine: eval(user_input) found only via AST; regex-only mode stays silent on it', () => {
@@ -967,6 +1008,22 @@ check('js-ast: while(true) with nested-break cleared; empty catch and eval caugh
   const s4 = r.findings.filter((f) => f.ruleId === 'SG-SEC-004');
   assert.strictEqual(s4.length, 1);
   assert.strictEqual(s4[0].line, 8);
+});
+
+check('js-ast: SG-SEC-005 catch with an explanatory comment is documented (LOW)', () => {
+  const r = analyzeJsFiles([
+    { path: 'b.js', content: 'function f() {\n  try { g(); } catch { /* already dead */ }\n}\n', is_test: false },
+  ]);
+  const x = r.findings.find((q) => q.ruleId === 'SG-SEC-005');
+  assert.ok(x, JSON.stringify(r.findings));
+  assert.strictEqual(x.severity, 'LOW');
+});
+
+check('js-ast: SG-SEC-005 bare empty catch stays MEDIUM', () => {
+  const r = analyzeJsFiles([{ path: 'a.js', content: 'function f() { try { g(); } catch {} }\n', is_test: false }]);
+  const x = r.findings.find((q) => q.ruleId === 'SG-SEC-005');
+  assert.ok(x, JSON.stringify(r.findings));
+  assert.strictEqual(x.severity, 'MEDIUM');
 });
 
 check('js-ast: test files keep syntax gate, skip shields', () => {

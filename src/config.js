@@ -12,7 +12,10 @@
 
 const fs = require('fs');
 
-const SEVERITY_RANK = { CRITICAL: 3, HIGH: 2, MEDIUM: 1 };
+// LOW exists so analyzers can emit an advisory-only severity: a finding at
+// LOW never blocks under the default floor (MEDIUM), and a repository can
+// still set minBlockSeverity to LOW to demand blocking on everything.
+const SEVERITY_RANK = { CRITICAL: 3, HIGH: 2, MEDIUM: 1, LOW: 0 };
 const DEFAULTS = Object.freeze({
   disable: [],
   ignorePaths: [],

@@ -123,7 +123,16 @@ def analyze(path, src, is_test):
         if isinstance(n, ast.Try):
             for h in n.handlers:
                 if h.body and all(isinstance(s, (ast.Pass, ast.Continue)) for s in h.body):
-                    add("SG-SEC-005", "CWE-390", "MEDIUM",
+                    # A comment on the handler's lines is the author's reason
+                    # at the site: a documented swallow. LOW is advisory under
+                    # the default minBlockSeverity (MEDIUM); unexplained stays
+                    # MEDIUM. The span starts at the except line so a
+                    # same-line hash-comment counts too.
+                    # NOTE: no backticks and no dollar-brace in this comment -
+                    # it lives inside the JS template literal.
+                    span = src.splitlines()[h.lineno - 1:(h.body[-1].end_lineno if hasattr(h.body[-1], "end_lineno") else h.lineno)]
+                    documented = any("#" in ln for ln in span)
+                    add("SG-SEC-005", "CWE-390", "LOW" if documented else "MEDIUM",
                         "Silent Exception Swallowing (Empty Catch / Except Pass)",
                         path, h.lineno,
                         "Log or propagate structured exceptions rather than silently masking failures.")

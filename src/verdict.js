@@ -98,6 +98,8 @@ function renderVerdict(result, { repo, ciSummary = '' }) {
                 ? ':red_circle: CRITICAL'
                 : f.severity === 'HIGH'
                 ? ':orange_circle: HIGH'
+                : f.severity === 'LOW'
+                ? ':small_blue_diamond: LOW'
                 : ':yellow_circle: MEDIUM') + (f.advisory ? ' *(advisory)*' : '');
             const loc = `\`${f.file}${f.line ? ':' + f.line : ''}\`${f.approx ? ' *(approx)*' : ''}`;
             return `| \`${f.ruleId}\` | **\`${f.cwe}\`** | ${sev} | ${loc} | **${f.title}**: *${f.remediation}* |`;
