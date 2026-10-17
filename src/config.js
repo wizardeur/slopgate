@@ -5,7 +5,9 @@
 // {
 //   "disable": ["SG-SEC-012"],          // rule IDs to skip entirely
 //   "ignorePaths": ["fixtures/**"],     // globs; matching files are not scanned
-//   "minBlockSeverity": "HIGH"          // findings below this severity are advisory
+//   "minBlockSeverity": "HIGH",         // findings below this severity are advisory
+//   "requireShaPins": true              // SG-SEC-011: also flag action refs that
+//                                       // are not a full 40-char commit SHA
 // }
 
 const fs = require('fs');
@@ -18,6 +20,10 @@ const DEFAULTS = Object.freeze({
   disable: [],
   ignorePaths: [],
   minBlockSeverity: 'MEDIUM', // findings at or above MEDIUM block by default
+  // Off by default: flagging every mutable tag is a policy choice, not a
+  // defect, and turning it on would red every consumer repo on a patch
+  // release. With it on, SG-SEC-011 requires a full commit SHA.
+  requireShaPins: false,
 });
 
 function globToRegex(glob) {
@@ -40,6 +46,7 @@ function loadConfig(repoRoot = process.cwd(), explicitPath = null) {
         disable: Array.isArray(raw.disable) ? raw.disable.map(String) : [],
         ignorePaths: Array.isArray(raw.ignorePaths) ? raw.ignorePaths.map(globToRegex) : [],
         minBlockSeverity: SEVERITY_RANK[raw.minBlockSeverity] ? raw.minBlockSeverity : DEFAULTS.minBlockSeverity,
+        requireShaPins: raw.requireShaPins === true,
         analyzers: {
           pythonAst: az.pythonAst !== false,
           jsAst: az.jsAst !== false,

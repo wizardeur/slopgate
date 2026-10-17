@@ -183,11 +183,23 @@ function analyzeJsFiles(files, { repoRoot } = {}) {
     if (file.is_test) continue; // shields exempt; syntax gate above still ran
 
     walk(ast, (node) => {
-      // SG-SEC-005: empty catch
+      // SG-SEC-005: empty catch. The author's slopgate-ignore marker may sit
+      // on the catch line or inside the (comment-only) body - the AST anchors
+      // the finding at the catch header, while the marker naturally lands on
+      // the next line. Consult the node's source span for the marker before
+      // reporting (mirrors engine's INLINE_IGNORE).
       if (node.type === 'CatchClause' && node.body && node.body.body.length === 0) {
+        const spanLines = String(file.content)
+          .split('\n')
+          .slice(node.loc.start.line - 1, node.loc.end.line);
+        if (spanLines.some((l) => /(?:#|\/\/|\/\*|<!--)\s*slopgate-ignore\b/.test(l))) {
+          return;
+        }
         // A comment INSIDE the handler body is the author's reason at the
         // site: a documented swallow. It stays reported at LOW - advisory
         // under the default minBlockSeverity (MEDIUM) - instead of blocking.
+        // An explicit slopgate-ignore marker (checked above) suppresses the
+        // finding outright; a plain explanatory comment only demotes it.
         // babel collects comments in ast.comments even with attachComment
         // false, so this needs no parser-option change.
         const documented = (ast.comments || []).some(

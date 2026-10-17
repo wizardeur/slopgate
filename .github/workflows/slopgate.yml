@@ -22,3 +22,36 @@ jobs:
           fail_on_slop: 'true'
           post_pr_comment: 'true'
           auto_polish: 'false'
+
+  # The gate job above only proves that this version of SlopGate sees no defect in itself.
+  # It never ran the suite, so a green "gate" said nothing about the 93 checks passing.
+  # This job makes the suite itself a gate: red suite blocks the pull request.
+  # It is independent of the gate job on purpose. Neither step needs the other, and a
+  # failure in one must not hide the verdict of the other.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Node pinned explicitly rather than "latest". package.json declares
+      # engines.node >= 20, so the floor is 20. Node 20 is the oldest line the repo
+      # supports, which makes it the strictest supported target and the one most likely
+      # to catch a use of an API that only exists in a newer runtime. The job runs the
+      # test suite, not the published action, so this is compatibility checking rather
+      # than a deployment runtime choice.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # The suite is not pure Node. src/analyzers/python-ast.js spawns python3 and
+      # reports available(): false without it, which fails 16 checks. Measured:
+      # 93 passed with python3 on PATH, 77 with a python3 shim that exits 127.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      # The repository has no lockfile (no package-lock.json, npm-shrinkwrap.json,
+      # yarn.lock or pnpm-lock.yaml), and npm ci refuses to run without one. The package
+      # has zero dependencies, so this is a no-op install today, kept so the job still
+      # installs correctly if a dependency is ever added.
+      - run: npm install --no-audit --no-fund
+      - run: npm test
