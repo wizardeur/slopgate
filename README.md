@@ -35,7 +35,7 @@ No LLM, no network calls, no code leaves the runner. Zero runtime dependencies; 
 | SG-SEC-021 | 434 | Upload configuration without file-type validation |
 | SG-SEC-022 | 942 | Wildcard host/origin allowlists in server configuration |
 
-**AST analyzers**: real syntax trees via Python's stdlib `ast` and a vendored, pinned `@babel/parser` (JS/TS/TSX). They provide syntax-error gates with exact lines, higher-precision versions of several shields, and one-hop taint rules for Python and PHP (including cross-line and top-level superglobal flows).
+**AST analyzers**: real syntax trees via Python's stdlib `ast` and a vendored, pinned `@babel/parser` (JS/TS/TSX). They provide syntax-error gates with exact lines, higher-precision versions of several shields, and one-hop taint rules for Python and PHP (including cross-line and top-level superglobal flows). An exception handler whose body carries only a comment - a documented swallow - is reported at LOW and is advisory under the default `minBlockSeverity` (MEDIUM), because the comment is the author's reason at the site; an unexplained swallow stays MEDIUM and blocks.
 
 **Import graph**: file- and symbol-level reachability across Python, JS/TS and PHP (composer psr-4, WordPress hooks as entrypoints). The verdict reports whether each finding sits on a path from a route or hook to a sink, or is confined.
 
