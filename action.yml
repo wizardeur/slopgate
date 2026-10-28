@@ -71,5 +71,12 @@ outputs:
     description: 'Lines skipped via inline slopgate-ignore comments'
 
 runs:
-  using: 'node20'
+  # node24, not node20: GitHub is retiring the node20 runtime for actions, and a
+  # consumer pinned to an action that still declares node20 keeps working only
+  # until that retirement lands - with the failure showing up in THEIR CI, not
+  # here. The action already runs on 24 wherever it is mounted on node24. The
+  # compatibility floor is unchanged and lives in engines.node (>=20), which the
+  # test job still pins explicitly so a runtime-only bump cannot hide an API
+  # that needs something newer.
+  using: 'node24'
   main: 'src/action.js'
