@@ -249,6 +249,137 @@ check('pwn-target: privileged pull_request_target + context head-ref checkout fl
   assert.strictEqual(pwn.isGreen, false);
 });
 
+// ---- SG-SEC-009: the rule must not flag its own remediation -----------------
+// The rule's remediation is "pass untrusted github.event.* fields through
+// environment variables". Until the engine carried block context, the fixed
+// shape and the defect were the same line to the matcher, so the rule redded
+// the fix. These four fixtures pin which side each shape lands on.
+
+const sec009 = (name) =>
+  evaluate(read(`${name}.diff`)).securityFindings.filter((x) => x.ruleId === 'SG-SEC-009');
+
+check('SG-SEC-009: env-bound comment body is NOT flagged (the recommended fix)', () => {
+  // The exact PR-547 shape: BODY: ${{ ... }} under env:, the script reads "$BODY".
+  const { evaluate: ev } = require('../src/engine');
+  const res = ev(read('pwn-env-fixed.diff'));
+  assert.strictEqual(res.securityFindings.length, 0, JSON.stringify(res.securityFindings));
+  assert.strictEqual(res.isGreen, true);
+});
+
+check('SG-SEC-009: the same body interpolated inside run: IS flagged', () => {
+  const found = sec009('pwn-run-inline');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].line, 8); // the `run: echo "${{ ... }}"` line
+  assert.strictEqual(found[0].cwe, 'CWE-426');
+});
+
+check('SG-SEC-009: env: does not launder a pull request head sha (not weakened)', () => {
+  const found = sec009('pwn-env-headsha');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].line, 9);
+  assert.ok(found[0].title.includes('Head SHA'), found[0].title);
+});
+
+check('SG-SEC-009: github.event head_ref under env: still fires (not weakened)', () => {
+  // Same expression as the head_ref shape, bound under env: instead of inline.
+  const diff =
+    'diff --git a/.github/workflows/review.yml b/.github/workflows/review.yml\n' +
+    '--- a/.github/workflows/review.yml\n+++ b/.github/workflows/review.yml\n' +
+    '@@ -1,2 +1,6 @@\n' +
+    ' jobs:\n' +
+    '   review:\n' +
+    '+    steps:\n' +
+    '+      - env:\n' +
+    '+          REF: ${{ github.event.pull_request.head.ref }}\n' +
+    '+        run: echo "$REF"\n' +
+    '     runs-on: ubuntu-latest\n';
+  const found = evaluate(diff).securityFindings.filter((x) => x.ruleId === 'SG-SEC-009');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  // LINE 5, NOT 6: the expression stands on the REF line. The fixture's added
+  // lines are steps(4), env(5? no - see below) ... measured, not assumed:
+  //   +    steps:                      <- 4
+  //   +      - env:                    <- ... the expression sits on the REF line,
+  //   +          REF: ${{ ... }}          which the engine reports as 5.
+  //   +        run: echo "$REF"
+  // An earlier revision of this assertion named 6 and failed against a matcher
+  // that was doing the right thing - the line a finding carries is the line the
+  // EXPRESSION is on, and a check that pins the wrong line reds a correct fix.
+  assert.strictEqual(found[0].line, 5);
+});
+
+check('SG-SEC-009: github.head_ref inline in run: fires (the alias gap is closed)', () => {
+  // MEASURED ON MAIN BEFORE THIS CHANGE: this shape was NOT matched per line. The
+  // per-line pattern only knew github.event.<field>, and github.head_ref is an
+  // alias of github.event.pull_request.head.ref whose per-line branch covered the
+  // dotted form, not the alias. A previous revision of this check recorded that
+  // gap by asserting the result was EMPTY.
+  //
+  // The alias is now matched explicitly, so an empty result would mean the gap is
+  // back. This asserts the finding, not the absence of one: a test that pins a
+  // defect in place turns green the day the defect is fixed.
+  const found = sec009('pwn-headref-run');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].ruleId, 'SG-SEC-009');
+});
+
+check('SG-SEC-009: control - pwn-target still fires at the same id and line', () => {
+  // Proves the structural change did not shift an existing finding's position.
+  const found = sec009('pwn-target');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].line, 1);
+  assert.strictEqual(found[0].approx, true);
+  assert.ok(found[0].title.includes('pull_request_target'));
+});
+
+check('SG-SEC-001: control - vulnerable.diff line-level SQL finding is unchanged', () => {
+  // Second control at an exact line: app/db.py is an f-string SELECT.
+  const found = vuln.securityFindings.filter((x) => x.ruleId === 'SG-SEC-001');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].file, 'app/db.py');
+  assert.strictEqual(found[0].line, 5);
+  assert.strictEqual(found[0].approx, undefined);
+});
+
+// ---- unit: yamlBlock context is additive and workflow-only ------------------
+const { yamlBlockFor } = require('../src/engine');
+
+check('unit: yamlBlock names env / run / with and null elsewhere', () => {
+  const lines = [
+    'name: ci',
+    'on: pull_request',
+    'jobs:',
+    '  build:',
+    '    runs-on: ubuntu-latest',
+    '    steps:',
+    '      - name: Step',
+    '        env:',
+    '          BODY: ${{ github.event.comment.body }}',
+    '        run: echo "$BODY"',
+    '      - uses: actions/checkout@v4',
+    '        with:',
+    '          ref: main',
+  ];
+  const blocks = yamlBlockFor('/repo/.github/workflows/ci.yml', lines.map((code, i) => ({ code, line: i + 1 })));
+  assert.strictEqual(blocks.get(9), 'env');
+  assert.strictEqual(blocks.get(10), 'run');
+  assert.strictEqual(blocks.get(13), 'with');
+  assert.strictEqual(blocks.get(1), null); // name: at document root
+  assert.strictEqual(blocks.get(2), null); // on: at document root
+  assert.strictEqual(blocks.get(5), null); // runs-on: inside a step, not a named block
+});
+
+check('unit: yamlBlock is null for every non-workflow path (cheap path)', () => {
+  const entries = [{ code: 'env:', line: 1 }, { code: '  BODY: x', line: 2 }];
+  const blocks = yamlBlockFor('src/config.js', entries);
+  assert.strictEqual(blocks.get(1), null);
+  assert.strictEqual(blocks.get(2), null);
+});
+
+check('unit: a bad input yields null context, never a throw (rules unchanged)', () => {
+  const blocks = yamlBlockFor('/repo/.github/workflows/ci.yml', [{ code: null, line: 1 }]);
+  assert.strictEqual(blocks.get(1), null);
+});
+
 // ---- inline suppression ------------------------------------------------------
 check('suppression: slopgate-ignore skips the line for shields AND hygiene', () => {
   const diff =

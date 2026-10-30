@@ -1,0 +1,20 @@
+diff --git a/.github/workflows/preview.yml b/.github/workflows/preview.yml
+index 1111111..2222222 100644
+--- a/.github/workflows/preview.yml
++++ b/.github/workflows/preview.yml
+@@ -1,4 +1,14 @@
+ name: preview
+ on: pull_request
+ jobs:
+   preview:
+     runs-on: ubuntu-latest
+     steps:
+       - name: Resolve the head
++        env:
++          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
++          HEAD_REF: ${{ github.event.pull_request.head.ref }}
++        run: |
++          echo "resolved $HEAD_SHA on $HEAD_REF"
++          git checkout "$HEAD_SHA"
+       - name: Done
+         run: echo done

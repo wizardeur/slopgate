@@ -1,0 +1,19 @@
+diff --git a/.github/workflows/label.yml b/.github/workflows/label.yml
+index 1111111..2222222 100644
+--- a/.github/workflows/label.yml
++++ b/.github/workflows/label.yml
+@@ -1,4 +1,13 @@
+ name: label
+ on: pull_request
+ jobs:
+   triage:
+     runs-on: ubuntu-latest
+     steps:
+       - name: Label from the body
++        run: echo "${{ github.event.comment.body }}"
++      - name: Title
++        env:
++          TITLE: ${{ github.event.pull_request.title }}
++        run: echo "$TITLE"
+       - name: Done
+         run: echo done

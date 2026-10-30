@@ -31,8 +31,81 @@ const INLINE_IGNORE = /(?:#|\/\/|\/\*|<!--)\s*slopgate-ignore\b/;
 
 const TEST_DELETION_THRESHOLD = 25;
 
+const WORKFLOW_PATH = /\.github\/workflows\//i;
+/** The YAML keys this analysis acts on; everything else stays null. */
+const NAMED_BLOCKS = new Set(['env', 'run', 'with']);
+const YAML_KEY = /^(\s*)([A-Za-z0-9_.-]+)\s*:(?:\s|$)/;
+
 function normalize(raw) {
   return raw.normalize('NFKC').replace(STRIP_FOR_MATCH, '').slice(0, LINE_CAP);
+}
+
+/**
+ * YAML block context for a set of lines, keyed by new-file line number.
+ *
+ * A shield matcher receives one normalized line. For a workflow that is not
+ * enough to tell a defect from its own remediation: `BODY: ${{ github.event.x }}`
+ * under `env:` is the FIX for the injection that `run: echo "${{ github.event.x }}"`
+ * is. Both are a single line; only the block they sit in separates them.
+ *
+ * So we carry the structure: for each line, which key owns it. The owner is the
+ * nearest preceding line at LOWER indentation that has the shape `key:`. We then
+ * report the FIRST segment of that key's path (the YAML walk down from the
+ * document root), mapped to a named block when it is one we act on.
+ *
+ * Deliberately conservative:
+ *  - only `env`, `run` and `with` are named; anything else is null, so a rule
+ *    that switches on the value keeps its current behaviour everywhere else;
+ *  - `run:` needs a value on the key's own line (an unfolded `run: >` /
+ *    `run: |` block scalar opens with the indicator, which we do not follow);
+ *  - quotes and comments are not stripped, because getting that wrong would
+ *    make the answer confidently false instead of null;
+ *  - any failure returns {} for the file, and callers read a missing entry as
+ *    null. The context is additive: it must never change a rule that ignores it.
+ *
+ * @param {Array<{code: string, line: number|null}>} entries added lines
+ * @returns {Map<number, ('env'|'run'|'with'|null)>}
+ */
+function yamlBlockMap(entries) {
+  try {
+    const stack = []; // [{ indent, key }] - open YAML keys, outermost first
+    const byLine = new Map();
+    for (const { code, line } of entries) {
+      const text = normalize(code);
+      const at = text.search(/\S/);
+      if (at === -1) {
+        byLine.set(line, currentBlock(stack));
+        continue;
+      }
+      const indent = at;
+      while (stack.length > 0 && stack[stack.length - 1].indent >= indent) stack.pop();
+      // A NAMED KEY IS ITS OWN BLOCK. `run: echo "$BODY"` carries its value on the
+      // key's own line, so it never has children to ask the stack about - asking
+      // the stack BEFORE the push answered null for every single-line `run:`, which
+      // is the shape a workflow uses most. `env:` and `with:` escaped this only
+      // because their values always sit on following lines. (Measured: a map over
+      // a 13-line step produced env and with but null for the `run:` line.)
+      const key = text.match(YAML_KEY);
+      const named = key && NAMED_BLOCKS.has(key[2]) ? key[2] : null;
+      byLine.set(line, named || currentBlock(stack));
+      if (key) stack.push({ indent, key: key[2] });
+    }
+    return byLine;
+  } catch {
+    return new Map();
+  }
+}
+
+// The block a line belongs to: the outermost named key on its path.
+// `    with:` nested under a step is `with`; the step's `name:` under `with:`
+// is still `with`. `jobs:` at the root never shadows, because `jobs` is not named.
+function currentBlock(stack) {
+  for (const frame of stack) {
+    if (frame.key === 'env') return 'env';
+    if (frame.key === 'run') return 'run';
+    if (frame.key === 'with') return 'with';
+  }
+  return null;
 }
 
 function evaluate(diffText, options = {}) {
@@ -108,6 +181,19 @@ function evaluate(diffText, options = {}) {
 
     const ctx = { filePath: file.path, isTestFile: testFile, config };
 
+    // Structural YAML context, workflow files only. For every other path it is
+    // null and costs one regex test per file. Computed once per file; a missing
+    // entry in the map reads as null, so a shield that wants the block gets a
+    // definite answer rather than undefined.
+    const blockOf = WORKFLOW_PATH.test(file.path)
+      ? yamlBlockMap(file.addedLines.length > 0
+          ? file.hunks.length > 0
+            ? file.hunks.flatMap((h) => h.added)
+            : file.addedLines.map((code) => ({ code, line: null }))
+          : [])
+      : null;
+    const yamlBlockAt = (line) => (blockOf && blockOf.has(line) ? blockOf.get(line) : null);
+
     if (!skipped) {
       // ---- per-line pass (exact line numbers) ------------------------------
       // Headerless diffs (no @@ hunk) still get scanned: synthesize entries
@@ -139,7 +225,7 @@ function evaluate(diffText, options = {}) {
         for (const shield of shields) {
           if (disabled.has(shield.id)) continue;
           if (shield.appliesTo === 'non-test' && testFile) continue;
-          const variant = shield.match(norm, { ...ctx, rawLine: raw });
+          const variant = shield.match(norm, { ...ctx, rawLine: raw, yamlBlock: yamlBlockAt(newLine) });
           if (variant) record(shield, file.path, newLine, variant);
         }
       }
@@ -471,4 +557,22 @@ function evaluate(diffText, options = {}) {
   };
 }
 
-module.exports = { evaluate };
+// Test-facing entry point for the structural context: same cheap path as the
+// engine (null for non-workflow paths, {} on any failure), so a unit check
+// exercises the code the gate actually runs rather than a copy of it.
+function yamlBlockFor(filePath, entries) {
+  const rows = entries || [];
+  // NON-WORKFLOW PATHS ARE ALL-NULL, ONE ENTRY PER LINE. `new Map([[null, null]])`
+  // was an empty answer wearing a shape: a caller reading .get(line) for any line
+  // got undefined, not null, and "the block is unknown" has to read the same way
+  // everywhere or a rule switching on it sees three states instead of two.
+  if (!WORKFLOW_PATH.test(String(filePath))) {
+    return new Map(rows.map((e, i) => [e?.line ?? i + 1, null]));
+  }
+  const map = yamlBlockMap(rows);
+  // A bad input returns an empty map; normalise that to "every line unknown" too.
+  if (map.size === 0) return new Map(rows.map((e, i) => [e?.line ?? i + 1, null]));
+  return map;
+}
+
+module.exports = { evaluate, yamlBlockFor };
