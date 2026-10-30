@@ -4,6 +4,34 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## v1.10.2
+
+**v1.10.1 did not fix the case it was released for.** Released the same night,
+after v1.10.1 was measured still failing on the exact shape it targeted.
+
+### Fixed
+
+- **SG-SEC-009 kept firing on `env:` when the `env:` header was a CONTEXT line.**
+  v1.10.1 taught the rule the YAML block a changed line sits in, but the engine
+  built that block map from the diff's **added** lines only. A workflow that
+  already has an `env:` block and adds a key under it - which is what closing an
+  injection looks like in an existing file - has the `env:` header as CONTEXT,
+  so the new key read as "unknown block", and an unknown block means "fire as
+  before". The rule fired on its own remediation, one release after the release
+  meant to stop it.
+
+  Hunks now retain their context lines and the block map is built from both.
+  Measured on the real shape (dsh-org PR 552, `.github/workflows/checks.yml:146`):
+  zero findings; the same body inline in `run:` still fires; `head.ref` under
+  `env:` still fires.
+
+### Why the tests did not catch it
+
+The v1.10.1 fixture added `env:` itself, so the header was an ADDED line and the
+map saw it. The fixture reproduced a workflow being created, not one being
+repaired. Two fixtures now pin both: `env:` as context (must NOT fire) and
+`run:` as context (must fire), and reverting the context feed reds the suite.
+
 ## v1.10.1
 
 One consumer-observable change, and it removes a false alarm.

@@ -1,0 +1,14 @@
+diff --git a/.github/workflows/checks.yml b/.github/workflows/checks.yml
+index 3333333..4444444 100644
+--- a/.github/workflows/checks.yml
++++ b/.github/workflows/checks.yml
+@@ -140,6 +140,8 @@ jobs:
+       - name: resolve the PR this event is about
+         id: resolve
+         env:
+           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          COMMENT_BODY: ${{ github.event.comment.body }}
+         run: |
+           set -eu
++          printf '%s' "${COMMENT_BODY:-}" | grep -q marker
+           case "${{ github.event_name }}" in
