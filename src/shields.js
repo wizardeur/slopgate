@@ -45,9 +45,38 @@ const shields = [
       const sqlVerb =
         '\\b(?:SELECT\\s[\\s\\S]{0,120}?\\sFROM|INSERT\\s+INTO|UPDATE\\s+\\w+\\s+SET|DELETE\\s+FROM|DROP\\s+(?:TABLE|DATABASE)|ALTER\\s+TABLE|TRUNCATE\\s+TABLE)\\b';
       const interp = "(?:f[\"']|\\$\\{|[\"'][^\"'\\n]*\\+\\s*\\w+|[\"'][^\"'\\n]*[\"']\\s*%\\s*\\w|\\.format\\s*\\()";
+      // THE WINDOW MUST NOT CROSS A STATEMENT BOUNDARY (measured 2026-10-30).
+      // It used to be [\s\S]{0,240}?, which walks through `;`, `}`, `)` and straight
+      // into the NEXT statement. dsh-org/scripts/backfill-preset-origin.mjs made
+      // it visible: a fully parameterized query
+      //     UPDATE session_identity SET preset_origin = $1 ... , [v, id]
+      // sat 222 characters from `say(`wrote : ${wrote}`)` - a LOG LINE, after an
+      // `await db.end()` - and the rule joined them into "unparameterized SQL
+      // injection", blocked the PR, and attributed the finding to line 1 with the
+      // approx flag. Both findings on that file were this one joint.
+      //
+      // A SQL statement does not continue past a statement terminator, so the gap
+      // is now any run of characters that contains none of ; } ) and no newline
+      // followed by a line that starts a new statement.
+      // I FIRST ADDED a third branch here - `sqlVerb [\s\S]{0,240}? ` [^`]{0,240}? interp`
+      // - on the theory that a multi-line query would otherwise be lost. Measured
+      // immediately afterwards on the same file: it re-created the exact false
+      // positive I had just removed, because a backtick ANYWHERE between the verb
+      // and the interpolation satisfied it, and `COUNT;` ... `say(\`wrote` does that
+      // without containing a single interpolated query. One hole closed, another
+      // opened in the same edit.
+      //
+      // So there is no backtick branch. The gap below is newline-free AND
+      // terminator-free, which already allows a query wrapped across lines of an
+      // expression: every line it spans must have no ; } ) and no newline of its
+      // own, so the pairing stays inside ONE statement.
+      // The gap forbids ; and ) but NOT }, because a } inside the SQL text is legal:
+      // str.format placeholders are written {} INSIDE the query, and forbidding the
+      // brace lost that case (measured: .format went 1 -> 0 and only the brace did it).
+      const gap = '[^;)\\n]{0,240}?';
       return (
-        new RegExp(sqlVerb + '[\\s\\S]{0,240}?' + interp, 'i').test(block) ||
-        new RegExp(interp + '[\\s\\S]{0,240}?' + sqlVerb, 'i').test(block)
+        new RegExp(sqlVerb + gap + interp, 'i').test(block) ||
+        new RegExp(interp + gap + sqlVerb, 'i').test(block)
       );
     },
   },

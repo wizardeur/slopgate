@@ -4,6 +4,38 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## v1.10.4
+
+### Fixed
+
+- **SG-SEC-001 joined two statements into one and called it SQL injection.**
+  `blockMatch` searched a `[\s\S]{0,240}?` window, which walks through `;`, `)`
+  and newlines. In dsh-org PR 551 a **fully parameterized** query
+
+      UPDATE session_identity SET preset_origin = $1 ... , [v, id]
+
+  sat 222 characters from `say(\`wrote : \${wrote}\`)` - a log line, a separate
+  statement, after an `await db.end()` - and the rule reported "unparameterized
+  SQL injection" at line 1 with the approx flag, blocking the PR. Both findings
+  on that file were this one joint.
+
+  The window no longer crosses a statement boundary: the gap between the SQL verb
+  and the interpolation may contain no `;` and no `)`.
+
+- **`}` is allowed in the gap.** The first version of this fix forbade it and lost
+  `.format()`, whose placeholder `{}` is written INSIDE the query. Measured:
+  `.format` went 1 -> 0 and only the brace was responsible.
+
+### Also in this release (from 1.10.2, which never ran)
+
+- SG-SEC-009 and the diff's CONTEXT lines (see 1.10.2).
+
+### Not weakened
+
+Four true-positive classes are pinned by tests: `\${}` inside the query,
+string concatenation, `%s`, `.format()`, and Python f-strings. Reverting the
+window reds the suite.
+
 ## v1.10.3
 
 **v1.10.2 could not run at all.** It shipped a `node_modules` symlink.

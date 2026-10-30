@@ -1,0 +1,9 @@
+diff --git a/scripts/q.mjs b/scripts/q.mjs
+--- a/scripts/q.mjs
++++ b/scripts/q.mjs
+@@ -1,0 +1,6 @@
++const r = await db.query(
++  `UPDATE session_identity SET preset_origin = ${v}`);
++wrote += r.rowCount;
++await db.end();
++say(`wrote : ${wrote}`);

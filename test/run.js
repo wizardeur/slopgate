@@ -266,6 +266,44 @@ check('SG-SEC-009: env-bound comment body is NOT flagged (the recommended fix)',
   assert.strictEqual(res.isGreen, true);
 });
 
+check('SG-SEC-001: the block window does not cross a statement boundary', () => {
+  // MEASURED IN THE WILD: dsh-org PR 551. A fully parameterized query
+  //
+  //     UPDATE session_identity SET preset_origin = $1 ... , [v, id]
+  //
+  // sat 222 characters from `say(`wrote : ${wrote}`)` - a LOG LINE, a separate
+  // statement, after an `await db.end()` - and the [\s\S]{0,240}? window joined
+  // them into "unparameterized SQL injection", blocked the PR, and reported the
+  // finding at line 1 with the approx flag. The query parameterizes correctly.
+  const found = evaluate(read('sql-param-bestatement.diff'))
+    .securityFindings.filter((x) => x.ruleId === 'SG-SEC-001');
+  assert.deepStrictEqual(found, [], JSON.stringify(found));
+});
+
+check('SG-SEC-001: an interpolation INSIDE the same statement is still flagged', () => {
+  // The control for the check above, with the SAME trailing log line at the same
+  // distance. If the window fix had simply shortened the reach, this would go
+  // green and the false positive would have been traded for a false negative.
+  const found = evaluate(read('sql-param-bestatement-true.diff'))
+    .securityFindings.filter((x) => x.ruleId === 'SG-SEC-001');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].cwe, 'CWE-89');
+});
+
+check('SG-SEC-001: .format() placeholders inside the SQL text are still flagged', () => {
+  // The gap forbids ; and ) but NOT } - a str.format placeholder is written {}
+  // INSIDE the query, so forbidding the brace lost this whole class. Measured:
+  // .format went 1 -> 0 under the first version of this fix and only the brace
+  // was responsible.
+  const diff = [
+    'diff --git a/q.py b/q.py', '--- a/q.py', '+++ b/q.py', '@@ -1,0 +1,2 @@',
+    '+cur.execute("SELECT * FROM users WHERE name = {}".format(name))',
+    '+x = 1',
+  ].join('\n');
+  const found = evaluate(diff).securityFindings.filter((x) => x.ruleId === 'SG-SEC-001');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+});
+
 check('SG-SEC-009: env: AS A CONTEXT LINE still exempts the added key under it', () => {
   // THE SHAPE THAT GOT THROUGH v1.10.1. The fixture above adds `env:` itself, so
   // the block header is an ADDED line and the map sees it. The real workflow is
