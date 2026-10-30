@@ -4,6 +4,42 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## v1.10.1
+
+One consumer-observable change, and it removes a false alarm.
+
+### Fixed
+
+- **SG-SEC-009 no longer fires on its own remediation.** The rule tells you to
+  pass untrusted `github.event.*` fields through environment variables, and then
+  reported the line that does it:
+
+      env:
+        BODY: ${{ github.event.comment.body }}     <- was CWE-426 CRITICAL
+        run: echo "${{ github.event.comment.body }}"   <- still is
+
+  Both are one line to a matcher that only sees text. The engine now supplies the
+  YAML block each changed line sits in (`env`, `run`, `with`, or unknown), and the
+  rule stays silent only inside `env:`/`with:`. **If your workflow was red on the
+  `env:` shape, that red goes away.** Inside `run:`, or where the block cannot be
+  determined, it fires exactly as before.
+
+### Not weakened
+
+- `github.event.pull_request.head.sha` and `.head.ref` still fire in every block,
+  `env:` included: routing a head ref through an environment variable changes
+  where it is evaluated, not what it is worth, and a checked-out head ref runs
+  attacker code.
+- `github.head_ref` - the alias - is now matched explicitly. It was silently NOT
+  matched per line before this release: the pattern only knew the dotted
+  `github.event.<field>` form. That is a gap this release closes, not inherits.
+
+### Verified
+
+106 checks before, 116 after. Three mutations, each restored, each reddening the
+suite: removing the `env:`/`with:` exception, reverting "a named key is its own
+block", and removing the `head_ref` branch.
+
 ## v1.10.0
 
 Twelve commits since v1.9.2. Two of them change something a consumer can

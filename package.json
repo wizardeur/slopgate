@@ -1,6 +1,6 @@
 {
   "name": "slopgate",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "description": "Deterministic pull-request gate: hygiene checks, 22 CWE-mapped security shields, reachability analysis. Zero runtime dependencies.",
   "license": "MIT",
   "bin": {
