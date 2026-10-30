@@ -261,12 +261,44 @@ const shields = [
     remediation:
       'Pass untrusted github.event.* fields through environment variables; for pull_request_target workflows never check out or execute untrusted head refs/code.',
     appliesTo: 'non-test',
-    match(line, { filePath }) {
+    match(line, { filePath, yamlBlock }) {
       if (!/\.github\/workflows\//i.test(filePath)) return null;
-      const untrusted =
-        /github\.event\.pull_request\.head\.(?:sha|ref)/i.test(line) ||
-        /\$\{\{\s*github\.event\.(?:issue\.title|pull_request\.title|pull_request\.body|comment\.body|review\.body|head_ref)\s*\}\}/i.test(line);
-      return untrusted ? {} : null;
+      // A head SHA/ref is untrusted input wherever it appears, INCLUDING under
+      // `env:`. Routing it through an environment variable moves where the
+      // expression is evaluated, not what it is worth: `env: REF: ${{ github.event.
+      // pull_request.head.sha }}` followed by a checkout of `$REF`, or by a script
+      // that reads it, executes attacker-chosen code in a privileged context. The
+      // safe answer there is not indirection but "do not run that ref at all".
+      // (The fileMatch pass above already covers the pull_request_target case
+      // file-wide, so this per-line check is the extra, unweakened pin.)
+      if (/github\.event\.pull_request\.head\.(?:sha|ref)/i.test(line)) {
+        return { title: 'Untrusted Pull Request Head SHA/Ref Referenced in Workflow' };
+      }
+      // A BRANCH REF IS NOT RESCUED BY INDIRECTION. `github.head_ref` is the PR
+      // author's branch name, and `env: BRANCH: ${{ github.head_ref }}` followed by
+      // `git checkout "$BRANCH"` runs that branch: the indirection moves where the
+      // value is evaluated, not what it is worth. It stays flagged in every block,
+      // which is why it is tested BEFORE the env/with exception and is no longer
+      // in the interpolated list below. (Measured: with it in that list, this
+      // rule's own "head_ref under env: still fires" check failed.)
+      if (/\$\{\{\s*github\.(?:head_ref|event\.pull_request\.head\.ref)\s*\}\}/i.test(line)) {
+        return { title: 'Untrusted Branch Ref Referenced in Workflow' };
+      }
+      const interpolated =
+        /\$\{\{\s*github\.event\.(?:issue\.title|pull_request\.title|pull_request\.body|comment\.body|review\.body)\s*\}\}/i.test(
+          line
+        );
+      if (!interpolated) return null;
+      // This rule used to fire on its own remediation. `BODY: ${{ github.event.
+      // comment.body }}` bound under `env:` (or a step input under `with:`) is
+      // the RECOMMENDED fix: the expression is evaluated by Actions into the
+      // environment before the shell starts, so the payload is data the script
+      // reads from `$BODY`, never text spliced into a command line. The same
+      // expression inline in `run:` is the injection. Telling those apart needs
+      // the block a line sits in, which the engine now supplies as yamlBlock.
+      // When the block is unknown (null) we keep today's behaviour: flag.
+      if (yamlBlock === 'env' || yamlBlock === 'with') return null;
+      return {};
     },
     // The real pwn-request signal: pull_request_target (privileged context)
     // combined with untrusted checkout/interpolation ANYWHERE in the file's
