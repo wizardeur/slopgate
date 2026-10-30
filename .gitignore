@@ -2,3 +2,7 @@ node_modules/
 *.log
 .DS_Store
 __pycache__/
+# The bare name as well as the directory: a SYMLINK called node_modules (which is
+# what a worktree convenience link is) is not matched by `node_modules/`, and one
+# such link was committed in v1.10.2 and broke the action for every consumer.
+node_modules

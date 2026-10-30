@@ -4,6 +4,32 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## v1.10.3
+
+**v1.10.2 could not run at all.** It shipped a `node_modules` symlink.
+
+### Fixed
+
+- **`node_modules` was committed in v1.10.2 and every consumer's run failed
+  before the gate ran.** A worktree convenience link (`node_modules ->
+  /some/checkout/node_modules`, the same symlink `.gitignore` was supposed to
+  cover) slipped into the release commit: `.gitignore` listed `node_modules/`
+  with a trailing slash, and a trailing slash matches a DIRECTORY, not a symlink
+  of the same name. GitHub Actions then tried to stage the action repository and
+  died on
+
+      Could not find file '.../_staging/slopgate-.../node_modules'
+
+  measured on dsh-org PR 552 at 2026-10-30T05:54:24Z, before any finding was
+  produced. The link is removed and `.gitignore` now carries the bare name as
+  well, with the reason written next to it.
+
+### What v1.10.2 was for, unchanged
+
+The SG-SEC-009 context-line fix is in this release exactly as it was in 1.10.2;
+1.10.2 never got to run, so this is the first release that carries it to a
+consumer. See the 1.10.2 entry for the mechanism.
+
 ## v1.10.2
 
 **v1.10.1 did not fix the case it was released for.** Released the same night,
