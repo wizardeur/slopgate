@@ -266,6 +266,27 @@ check('SG-SEC-009: env-bound comment body is NOT flagged (the recommended fix)',
   assert.strictEqual(res.isGreen, true);
 });
 
+check('SG-SEC-009: env: AS A CONTEXT LINE still exempts the added key under it', () => {
+  // THE SHAPE THAT GOT THROUGH v1.10.1. The fixture above adds `env:` itself, so
+  // the block header is an ADDED line and the map sees it. The real workflow is
+  // different: `env:` is already there and only the new key is added, so the
+  // header is CONTEXT. v1.10.1 built its block map from added lines alone, every
+  // such key read as "unknown block", and the rule kept firing on the exact
+  // repair it recommends - measured in the wild: dsh-org PR 552 still red at
+  // checks.yml:146 with v1.10.1 running.
+  const found = sec009('pwn-env-context');
+  assert.deepStrictEqual(found, [], JSON.stringify(found));
+});
+
+check('SG-SEC-009: run: AS A CONTEXT LINE still flags the added line under it', () => {
+  // The control for the check above. If context lines were fed to the map in a
+  // way that made everything env, this would go green and the fix would have
+  // traded a false positive for a false negative.
+  const found = sec009('pwn-run-context');
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].cwe, 'CWE-426');
+});
+
 check('SG-SEC-009: the same body interpolated inside run: IS flagged', () => {
   const found = sec009('pwn-run-inline');
   assert.strictEqual(found.length, 1, JSON.stringify(found));

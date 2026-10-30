@@ -186,9 +186,16 @@ function evaluate(diffText, options = {}) {
     // entry in the map reads as null, so a shield that wants the block gets a
     // definite answer rather than undefined.
     const blockOf = WORKFLOW_PATH.test(file.path)
+      // THE MAP IS BUILT FROM THE HUNK'S CONTEXT AS WELL AS ITS ADDED LINES.
+      // Added-only was the bug: a new key under an `env:` that the diff did not
+      // touch is an orphan, and every such line read as "unknown block", which a
+      // rule must treat as "fire as before" - so the rule kept firing on the very
+      // shape it had just been taught to allow. Context lines carry the parent
+      // keys and their indent, which is the entire question.
       ? yamlBlockMap(file.addedLines.length > 0
           ? file.hunks.length > 0
-            ? file.hunks.flatMap((h) => h.added)
+            ? file.hunks.flatMap((h) => [...(h.context || []), ...h.added])
+                .sort((a, b) => (a.line ?? 0) - (b.line ?? 0))
             : file.addedLines.map((code) => ({ code, line: null }))
           : [])
       : null;

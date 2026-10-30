@@ -26,7 +26,14 @@ function parseDiff(diffText) {
     if (line.startsWith('@@')) {
       const m = line.match(/^@@\s*-\d+(?:,\d+)?\s*\+(\d+)/);
       newLine = m ? parseInt(m[1], 10) : 0;
-      hunk = { newStart: newLine, added: [], hunkText: '', addedText: '' };
+      // `context` KEEPS THE UNCHANGED LINES (card: SG-SEC-009 false positive).
+      // Without them a hunk is a set of orphans: `COMMENT_BODY: ${{ ... }}` is an
+      // added line whose `env:` parent sits three lines up as CONTEXT, so a
+      // structural reader that sees only `added` cannot tell which block the new
+      // line belongs to - and reports "unknown", which a rule must treat as
+      // "fire as before". The indent and the parent keys are the whole answer,
+      // and they are all in the context.
+      hunk = { newStart: newLine, added: [], context: [], hunkText: '', addedText: '' };
       current.hunks.push(hunk);
       continue;
     }
@@ -49,6 +56,7 @@ function parseDiff(diffText) {
       current.removedLines.push(line.slice(1));
       // removed lines do not advance the new-file counter
     } else if (line.startsWith(' ') || line === '') {
+      if (hunk) hunk.context.push({ code: line.slice(1), line: newLine });
       newLine++;
     }
   }
