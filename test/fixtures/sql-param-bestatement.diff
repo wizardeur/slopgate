@@ -1,0 +1,10 @@
+diff --git a/scripts/backfill-preset-origin.mjs b/scripts/backfill-preset-origin.mjs
+--- a/scripts/backfill-preset-origin.mjs
++++ b/scripts/backfill-preset-origin.mjs
+@@ -1,0 +1,7 @@
++const r = await db.query(
++  `UPDATE session_identity SET preset_origin = $1
++    WHERE session_id = $2 AND source = 'inherited'`, [v, id]);
++wrote += r.rowCount;
++await db.end();
++say(`wrote : ${wrote}`);
