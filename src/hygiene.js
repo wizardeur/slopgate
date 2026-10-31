@@ -50,6 +50,16 @@ function checkHygiene(text) {
     // A backslash-class prefix (\d, \s, \w, \b) followed by more characters,
     // accepted only when the sequence sits inside a regex literal.
     const classWithSuffix = /^\\[dswb]/;
+    // Prose shapes: a line whose content is a COMMENT (// , /* , * , # , <!--)
+    // never reaches a shell, so an escape written there is being TALKED about,
+    // not executed. Measured 2026-10-30 on this very change: the comments that
+    // document this rule were read as four artifacts (\dms, \wizz, \data), so
+    // the fix for a false alarm was itself blocked by the same false alarm.
+    // This is the same line the file already draws for escaped backticks
+    // ("a line-level check cannot tell an escaped backtick in prose from one
+    // inside a template literal") - finished for comments instead of half-made.
+    const trimmed = text.trimStart();
+    const isComment = /^(\/\/|\/\*|\*|#|<!--)/.test(trimmed);
     const insideRegexLiteral = (whole, seq) => {
       const at = whole.indexOf(seq);
       if (at < 0) return false;
@@ -64,7 +74,7 @@ function checkHygiene(text) {
       if (escapedOpen) return false;
       return whole.slice(at + seq.length).includes('/');
     };
-    const suspicious = shellEscapes.filter(
+    const suspicious = isComment ? [] : shellEscapes.filter(
       (s) => !validEscape.test(s) && !regexClass.test(s) && !namespaceish.test(s)
         && !(classWithSuffix.test(s) && insideRegexLiteral(text, s))
     );
