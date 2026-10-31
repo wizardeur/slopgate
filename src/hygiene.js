@@ -28,13 +28,45 @@ function checkHygiene(text) {
   // SQL LIKE escapes, found by dogfooding on a real WP plugin).
   // What remains: a backslash glued to a lowercase word: is the artifact
   // this check hunts.
+  //
+  // A regex class with a SUFFIX inside a regex literal is legitimate too
+  // (card in dsh-org, measured 2026-10-30 on dsh-org PR #565: ONE line of 864
+  // added, `!/\dms\b/.test(specA)`, was read as "\dms" and charged the diff
+  // the full 40-point hygiene penalty, taking Engineering Score 100 -> 60,
+  // exactly its pass threshold). `\d` is a class and `ms` is a literal suffix:
+  // well-formed JavaScript. The old predicates both missed it because
+  // validEscape is anchored to the whole match and regexClass wants exactly
+  // one letter, so a class followed by anything was neither.
+  //
+  // The narrowing is scoped to regex literals on purpose: `\dms` between two
+  // slashes is a regex, while `"C:\Users\wizz"` outside one is still the
+  // artifact this rule exists for. Widening the global escape list instead
+  // would have been the change that turns this rule into a rubber stamp.
   const shellEscapes = text.match(/\\[a-zA-Z_0-9]+/g);
   if (shellEscapes) {
     const validEscape = /^\\[nrt0bfvxu_]/i;
     const regexClass = /^\\[a-zA-Z0-9]$/;
     const namespaceish = /^\\[A-Z]/;
+    // A backslash-class prefix (\d, \s, \w, \b) followed by more characters,
+    // accepted only when the sequence sits inside a regex literal.
+    const classWithSuffix = /^\\[dswb]/;
+    const insideRegexLiteral = (whole, seq) => {
+      const at = whole.indexOf(seq);
+      if (at < 0) return false;
+      const before = whole.slice(0, at);
+      // The nearest unescaped slash before the sequence, and the nearest after
+      // it: an odd opening slash and a closing slash means the sequence is
+      // between them. Good enough for a line-level check, and it is the same
+      // level the rest of this function works at.
+      const open = before.lastIndexOf('/');
+      if (open < 0) return false;
+      const escapedOpen = (before.slice(0, open).match(/\\+$/) || [''])[0].length % 2 === 1;
+      if (escapedOpen) return false;
+      return whole.slice(at + seq.length).includes('/');
+    };
     const suspicious = shellEscapes.filter(
       (s) => !validEscape.test(s) && !regexClass.test(s) && !namespaceish.test(s)
+        && !(classWithSuffix.test(s) && insideRegexLiteral(text, s))
     );
     if (suspicious.length > 0) {
       issues.push(`Found shell escaping artifacts: ${suspicious.slice(0, 3).join(', ')}`);
