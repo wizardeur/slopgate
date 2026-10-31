@@ -97,6 +97,36 @@ check('hygiene-only: blocked at score 40, no security findings', () => {
   assert.strictEqual(hygiene.hygieneIssues.length, 1); // slop phrase; the escaped-backtick check was removed after external dogfooding
 });
 
+// ---- unit: a regex class glued to a suffix is not a shell artifact --------
+// Measured 2026-10-30T23:3xZ, on the real diff of dsh-org PR #565 (864 added
+// lines, exactly ONE line hit this rule):
+//
+//   /^ok chokepoint: ... $/m.test(specA) && !/\dms\b/.test(specA))
+//                                        ^^^^ "Found shell escaping artifacts: \dms"
+//
+// `\d` is a character class and `ms` is a literal suffix: well-formed
+// JavaScript. The rule misses it because validEscape is anchored to the WHOLE
+// match (`^\\[nrt0bfvxu_]`) and regexClass wants exactly one letter, so a class
+// followed by anything is neither. One such line took the diff's Engineering
+// Score from 100 to 60, which is its pass threshold, and blocked the PR.
+//
+// Both directions are below, because narrowing a rule is exactly the change
+// that can turn it into a rubber stamp.
+check('unit: a regex class with a suffix inside a regex literal is NOT a shell artifact', () => {
+  var body = 'diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n';
+  body += '+const ok = a && !/\\dms\\b/.test(specA);\n';
+  const res = evaluate(body);
+  assert.deepStrictEqual(res.hygieneIssues, []);
+});
+
+check('unit: a Windows path outside any regex is still an artifact', () => {
+  var body = 'diff --git a/scripts/y.mjs b/scripts/y.mjs\n--- a/scripts/y.mjs\n+++ b/scripts/y.mjs\n';
+  body += '+const broken = "C:\\Users\\wizz\\data";\n';
+  const res = evaluate(body);
+  assert.strictEqual(res.hygieneIssues.length, 1);
+  assert.ok(res.hygieneIssues[0].includes('shell escaping artifacts'));
+});
+
 // ---- unit: trojan source bidi --------------------------------------------
 check('unit: bidi unicode triggers SG-SEC-010 even in test files', () => {
   const diff =
