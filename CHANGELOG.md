@@ -4,6 +4,38 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## v1.10.5
+
+### Fixed
+
+- **A regex class with a suffix was read as a shell-escaping artifact, and cost a
+  clean diff its whole hygiene allowance.** Measured on `dsh-org` PR #565: ONE added
+  line of 864, `!/\dms\b/.test(specA)`, matched `\\[a-zA-Z_0-9]+` as `\dms`, and the
+  artifact branch charged the diff the full 40-point penalty, taking Engineering
+  Score from 100 to 60 - exactly its pass threshold - so a PR whose 12-shield
+  security verdict was 100% green came back `BLOCKED` at `60/100 >= 60/100`.
+
+  `\d` is a character class and `ms` is a literal suffix. Both predicates missed it
+  because `validEscape` is anchored to the WHOLE match and `regexClass` wants exactly
+  one letter, so a class followed by anything was neither shape.
+
+  The narrowing is scoped to **regex literals**, not to the escape list: adding `s`,
+  `d`, `w`, `b` to `validEscape` would have fixed the same line in one character and
+  turned the rule into a rubber stamp for every consumer repo. An artifact in code is
+  still an artifact.
+
+- **A comment that talks about an escape was read as an artifact.** The fix for the
+  false alarm above was itself blocked by that same false alarm: the comments
+  documenting the rule were matched as four artifacts (`\dms`, `\wizz`, `\data`). A
+  line whose content starts with `//`, `/*`, `*`, `#` or `<!--` never reaches a shell,
+  so an escape written there is being talked about, not executed. This is the line the
+  file already drew for escaped backticks, finished rather than half-made.
+
+### Known limit
+
+- `\t` and `\n` still swallow a glued suffix (`\to`, `\thing`), because `validEscape`
+  is case-insensitive and anchored to the prefix. Pre-existing, and a separate change.
+
 ## v1.10.4
 
 ### Fixed
