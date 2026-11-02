@@ -4,7 +4,7 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
-## Unreleased
+## v1.10.6
 
 ### Fixed
 
