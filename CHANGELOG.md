@@ -4,6 +4,32 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## Unreleased
+
+### Fixed
+
+- **A well-formed ANSI SGR sequence was read as a raw control character, and cost a
+  clean diff its whole hygiene allowance.** Measured on `dsh-org` PR #618
+  (2026-11-02): two FIXTURE logs whose purpose is to be fed to a parser that matches
+  `/\x1b\[1m(.*?)\x1b\[0m/` carry `ESC[1m` by construction, so `checkHygiene`
+  charged the full 40-point hygiene penalty and the PR blocked at Engineering Score
+  exactly 60 - the same class, at the same number, as the `\dms` case in v1.10.5.
+  ESC is now exempt ONLY inside a well-formed SGR sequence; a lone ESC or an ESC
+  before any other byte is still an artifact. Both directions are pinned.
+- **A control character was reported once per matching rule.** Two overlapping range
+  tests each pushed the same message; the second is gone.
+
+### Changed
+
+- **The score is no longer reported as if it were a measurement.** `slopScore` is a
+  fixed value per class (security 70/90, slop markers 85, test deletions 75, hygiene
+  40), so `AI Slop Score 40%` named a class and told a reader nothing about what to
+  fix. The verdict now carries a "What the score is made of" table listing every
+  class that fired with the detail the engine had already computed.
+- **Hygiene runs per file, and names the file.** It used to run on the joined diff
+  text, so "control characters" could not say which file carried them and a reader
+  had to re-run `checkHygiene()` by hand to find out.
+
 ## v1.10.5
 
 ### Fixed

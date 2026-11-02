@@ -122,6 +122,7 @@ ${analysisSection(result)}
 | **Blast Radius** | \`${blastRadius.impactedLayers.length} layer(s) / ${blastRadius.totalFilesChanged} file(s)\` | \`Contained\` | ${blastRadius.crossLayerReachability ? ':x: Cross-Layer Sink' : ':white_check_mark: Isolated'} |
 | **Shields Passed** | \`${invariantsVerified}\` | \`100%\` | :white_check_mark: |
 | **Diff Minimization (real)** | \`${linesReduced}\` | \`informational\` | :white_check_mark: |
+${scoreSection(result)}
 
 ### Architectural blast radius
 > **Exploit reachability**: ${blastRadius.reachabilitySummary}
@@ -153,6 +154,57 @@ function renderCiSummary({ classification, passCount, gatedCount, flakeCount, de
 
 // Analysis-depth section: shown whenever any analyzer module ran. Explicitly
 // says "regex" when no analyzer was available: never silently degrades.
+/**
+ * THE SCORE IS A CLASS, NOT A MEASUREMENT, AND THE REPORT MUST SAY SO.
+ * `slopScore` is a ladder of fixed values (security 70/90, slop markers 85, test
+ * deletions 75, hygiene 40), so "AI Slop Score 40%" tells a reader the CLASS that
+ * fired and nothing about what to fix. Measured on dsh-org PR #618 (2026-11-02):
+ * the blocking reason was two fixture logs containing ANSI SGR sequences, and the
+ * report named neither the files nor the rule - a reader had to go and run
+ * checkHygiene() by hand to find out. A gate that blocks without telling you why
+ * is a gate people route around, which is the same lesson this repo already
+ * recorded for the `\\dms` false alarm.
+ *
+ * Every class that contributes is listed, and each one carries the detail the
+ * engine already computed - it was being dropped between engine.js and this file.
+ */
+function scoreClasses(result) {
+  const rows = [];
+  if (result.slopMarkers?.length) {
+    rows.push(`| Slop markers | \`85\` | \`${result.slopMarkers.join(', ')}\` |`);
+  }
+  if (result.hasTestDeletions) {
+    rows.push(`| Mass test deletions | \`75\` | \`${result.testDeletions} deleted test line(s), 0 replacements\` |`);
+  }
+  if (result.hygieneIssues?.length) {
+    rows.push(`| Hygiene | \`40\` | \`${result.hygieneIssues.join('; ')}\` |`);
+  }
+  const blocking = result.blockingFindings ?? [];
+  if (blocking.length) {
+    const worst = blocking.some((f) => f.severity === 'CRITICAL') ? '90' : '70';
+    const named = blocking.slice(0, 5).map((f) => `${f.ruleId} ${f.cwe} ${f.file}${f.line ? `:${f.line}` : ''}`);
+    rows.push(`| Security finding(s) | \`${worst}\` | \`${named.join('; ')}${blocking.length > 5 ? `; +${blocking.length - 5} more` : ''}\` |`);
+  }
+  return rows;
+}
+
+function scoreSection(result) {
+  const rows = scoreClasses(result);
+  if (!rows.length) return '';
+  // A class ladder can only report ONE class, so the contributing rows are named
+  // rather than summed: summing them would invent a number the gate never computed.
+  return `
+### What the score is made of
+> \`slopScore\` is a FIXED VALUE PER CLASS, not a percentage of anything measured. This run reports \`${result.slopScore}%\` because a class fired; the classes below are what fired, with the detail this gate already had.
+
+| Class | Contribution | Detail |
+| :--- | :---: | :--- |
+${rows.join('\n')}
+
+If a row above names a fixture, a generated file or an encoding artifact, the fix is usually \`slopgate-ignore\` with a reason on that line, not a code change.
+`;
+}
+
 function analysisSection(result) {
   const a = result.analysis;
   if (!a) return '';

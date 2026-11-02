@@ -128,7 +128,18 @@ function evaluate(diffText, options = {}) {
     .map((l) => l.slice(0, LINE_CAP))
     .join('\n');
 
-  const hygieneIssues = checkHygiene(addedTextJoined);
+  // PER FILE, NAMED (dsh-org PR #618, 2026-11-02). Hygiene used to run on the
+  // JOINED diff text, so a control-character finding could not say WHICH file
+  // carried it - the reader had to re-run checkHygiene() by hand over every added
+  // file to find out. Running it per file costs one pass and makes the report
+  // actionable: "control characters in scripts/ci-failure-set-fixture-base.log" is
+  // a fact a reader can act on, and "control characters" alone is a puzzle.
+  const hygieneIssues = [];
+  for (const f of files) {
+    for (const issue of checkHygiene(f.addedLines.join('\n'))) {
+      hygieneIssues.push(f.path ? `${issue} in ${f.path}` : issue);
+    }
+  }
   const slopMarkers = findSlopMarkers(addedTextJoined);
 
   const securityFindings = [];
