@@ -15,10 +15,31 @@ function checkHygiene(text) {
   const issues = [];
   if (!text) return issues;
 
-  // Raw non-printable control characters, except U+0004 (EOT): the gettext
-  // plural/msgctxt separator that i18n tooling legitimately embeds (found by
-  // dogfooding on a real WP plugin's make-i18n-json.py).
-  if (/[\x00-\x03\x05-\x08\x0B\x0C\x0E-\x1F]/.test(text)) {
+  // Raw non-printable control characters, except two shapes that are legitimate:
+  //
+  //   U+0004 (EOT) - the gettext plural/msgctxt separator i18n tooling embeds
+  //   (found by dogfooding on a real WP plugin's make-i18n-json.py).
+  //
+  //   ESC U+001B WHEN IT OPENS AN ANSI SGR SEQUENCE - `ESC[1m`, `ESC[0m`, the
+  //   colour codes every CI and test log carries. Found by dogfooding on dsh-org
+  //   PR #618 (2026-11-02): two FIXTURE logs that exist precisely because the
+  //   parser under test matches `/\x1b\[1m(.*?)\x1b\[0m/` cannot contain
+  //   anything else, so a test of an ANSI parser was charged the full 40-point
+  //   hygiene penalty and blocked at Engineering Score exactly 60 - the same
+  //   false-alarm class, at the same number, as the `\dms` case documented
+  //   below. A rule that reds on the only input a fixture can be is not
+  //   protecting anything.
+  //
+  // The narrowing is deliberately exact: ESC is exempt ONLY when immediately
+  // followed by `[` and SGR parameters and a terminator. A LONE ESC, or ESC
+  // before any other byte, still counts - that is the artifact this rule hunts
+  // (terminal corruption, mojibake, a truncated capture), and it is what a
+  // caller passing genuinely broken text will look like.
+  // Strip only WELL-FORMED sequences, then run the one range test: ESC stays in
+  // the range, so a lone ESC or an ESC before any other byte is still caught, and
+  // a control character is reported ONCE rather than once per rule.
+  const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+  if (/[\x00-\x03\x05-\x08\x0B\x0C\x0E-\x1F]/.test(text.replace(ANSI_SGR, ''))) {
     issues.push('Found raw non-printable control characters');
   }
 

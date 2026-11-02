@@ -166,6 +166,26 @@ check('hygiene: control characters detected', () => {
   assert.ok(checkHygiene('x\x01y').includes('Found raw non-printable control characters'));
 });
 
+// ANSI SGR is NOT an artifact - and a LONE ESC still is. Measured on dsh-org PR #618
+// (2026-11-02): two fixture logs whose whole purpose is to be fed to a parser that
+// matches /\x1b\[1m(.*?)\x1b\[0m/ were charged the full 40-point hygiene penalty and
+// blocked at Engineering Score exactly 60. Both directions are pinned here, because an
+// exemption that also passes a lone ESC would be a hole rather than a narrowing.
+check('hygiene: a well-formed ANSI SGR sequence is not a control-character artifact', () => {
+  assert.strictEqual(checkHygiene('\x1b[1mee2e\x1b[0m FAILED').length, 0);
+  assert.strictEqual(checkHygiene('a \x1b[0;32mok\x1b[0m b').length, 0);
+});
+
+check('hygiene: a LONE ESC, or ESC before a non-SGR byte, is still caught', () => {
+  assert.ok(checkHygiene('x\x1by').includes('Found raw non-printable control characters'));
+  assert.ok(checkHygiene('x\x1b[Ky').includes('Found raw non-printable control characters'));
+});
+
+check('hygiene: a control character is reported ONCE, not once per rule', () => {
+  const issues = checkHygiene('x\x01y');
+  assert.strictEqual(issues.filter((i) => i.includes('control characters')).length, 1);
+});
+
 check('hygiene: multi-char shell escapes flagged, regex/escape sequences exempt', () => {
   assert.ok(checkHygiene('make\\install').some((i) => i.includes('shell escaping'))); // slopgate-ignore: intentional artifact fixture
   assert.ok(checkHygiene('app\\continue').some((i) => i.includes('shell escaping'))); // slopgate-ignore: intentional artifact fixture
