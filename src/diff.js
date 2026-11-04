@@ -15,8 +15,19 @@
 
 const { execSync } = require('child_process');
 
+// A DIFF IS NOT SMALL, AND execSync's DEFAULT BUFFER IS 1 MiB. Without maxBuffer here, any pull
+// request over roughly a megabyte of diff throws ENOBUFS - and `attempt` below catches it and
+// returns null, so the gate reports "cannot compute a diff ... an empty range is not treated as a
+// pass" for a pull request whose diff is perfectly computable. Measured on a real 1,080,625-byte
+// diff: ENOBUFS, and the workaround took five wrong diagnoses because the message names the
+// checkout, not the buffer.
+//
+// The ceiling matches the analyzers in this same package (py-imports.js, external.js,
+// python-ast.js all set maxBuffer explicitly); diff.js was the one call that forgot.
+const MAX_DIFF_BYTES = 64 * 1024 * 1024;
+
 function sh(cmd) {
-  return execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+  return execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: MAX_DIFF_BYTES });
 }
 
 function diffFailureMessage(baseBranch) {
@@ -55,4 +66,4 @@ function resolveDiff(baseBranch, run = sh) {
   return diff;
 }
 
-module.exports = { resolveDiff, diffFailureMessage };
+module.exports = { resolveDiff, diffFailureMessage, MAX_DIFF_BYTES };
