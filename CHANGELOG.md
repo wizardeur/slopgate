@@ -4,6 +4,35 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## v1.10.7
+
+### Fixed
+
+- **A merge-base diff over 1 MiB was reported as "cannot compute a diff against the
+  base branch".** Measured on `dsh-org` PR #632 (2026-11-04): that PR's diff is
+  1,080,625 bytes, `execSync` WITHOUT a `maxBuffer` inherits Node's default ceiling of
+  1 MiB, the throw (ENOBUFS) was caught by the same handler that catches a missing
+  merge base, and the gate failed with the shallow-checkout message - sending the
+  consumer through five checkout-side fixes (fetch-depth 0, an explicit base ref,
+  `--unshallow`, moving HEAD onto the PR head) for a problem that was never the
+  checkout. Two changes, neither of which turns a red into a green:
+  - the ceiling is RAISED to 64 MiB, explicit and on the record;
+  - the read SPLITS as a backstop: when the whole-range read still fails, the SAME
+    three-dot merge-base range is re-read in batches of the changed paths and the
+    chunks are concatenated - byte-identical to the whole read, pinned by test across
+    a batch boundary and on a filename that needs shell quoting.
+  Fail-closed semantics are preserved and pinned: a missing merge base fails every
+  batch the same way it fails the whole read; an empty changed-path list (head ==
+  base) yields no batches and still returns null; any failed batch returns null. The
+  one honest limit left: a single path whose own diff exceeds the ceiling still fails
+  closed - a diff that cannot be read must not be scanned partially.
+
+### Changed
+
+- **`package.json` now carries the released version.** The field had drifted since
+  v1.10.4 - the v1.10.6 release note recorded the drift as "worth a decision rather
+  than a habit"; this release makes the decision: the field tracks the tag.
+
 ## v1.10.6
 
 ### Fixed
