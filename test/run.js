@@ -1791,5 +1791,158 @@ check('v1.9.2: same shape without the marker still fires (control)', () => {
   assert.strictEqual(s5[0].via, 'ast');
 });
 
+// ---- diff acquisition: the 1 MiB ceiling and the split read (v1.10.7) -----
+// The defect this pins was measured on dsh-org PR #632 (2026-11-04): that PR's
+// merge-base diff is 1,080,625 bytes, execSync WITHOUT maxBuffer threw ENOBUFS
+// on it, `attempt` turned the throw into null, and the gate reported "cannot
+// compute a diff against the base branch main" - a buffer limit wearing a
+// checkout problem's message. Five checkout-side fixes in that repo changed
+// nothing, because the checkout was never the problem.
+const { execSync } = require('child_process');
+const { mkdtempSync, writeFileSync, rmSync } = require('fs');
+const { tmpdir } = require('os');
+const { resolveDiffSplit } = require('../src/diff');
+// `resolveDiff` is already imported at the top of this file (from src/action,
+// which re-exports the diff module's function); the new checks reuse that one.
+
+function initDiffRepo() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'slopgate-diff-'));
+  const g = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf-8' });
+  g(['init', '-q', '-b', 'main']);
+  g(['config', 'user.email', 'test@slopgate.local']);
+  g(['config', 'user.name', 'slopgate-test']);
+  g(['config', 'commit.gpgsign', 'false']);
+  return { dir, g };
+}
+
+// A real base -> head history whose whole diff is OVER the old 1 MiB default,
+// with a quoted/spaced filename among the changes so the shell quoting of the
+// batched read is exercised on real bytes, not on well-behaved names.
+function bigDiffRepo() {
+  const { dir, g } = initDiffRepo();
+  writeFileSync(path.join(dir, 'base.txt'), 'base\n');
+  g(['add', '.']);
+  g(['commit', '-q', '-m', 'base']);
+  g(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  const big = Array.from({ length: 90000 }, (_, i) => `line ${i} padding`).join('\n');
+  writeFileSync(path.join(dir, 'big.txt'), `${big}\n`);
+  writeFileSync(path.join(dir, "weird 'name' with spaces.txt"), 'quoted\n');
+  writeFileSync(path.join(dir, 'small.txt'), 'small change\n');
+  g(['add', '.']);
+  g(['commit', '-q', '-m', 'head']);
+  return { dir, g };
+}
+
+check('diff: a >1 MiB merge-base diff resolves through the raised ceiling (the #632 defect)', () => {
+  const { dir, g } = bigDiffRepo();
+  try {
+    // Prove the fixture is over the OLD ceiling: execSync WITHOUT maxBuffer,
+    // bound to the fixture cwd, still throws on this repo's diff. This is the
+    // guard that keeps the test honest if the fixture ever shrinks below the
+    // limit it exists to be over.
+    let oldThrew = false;
+    try {
+      execSync('git diff origin/main...HEAD', { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch {
+      oldThrew = true;
+    }
+    assert.strictEqual(oldThrew, true, 'fixture diff fell under the 1 MiB default - fixture is too small');
+
+    // The REAL sh (the module's own default run, with the raised ceiling) must
+    // resolve it. The resolver reads process.cwd(), so this runs in a child
+    // process whose cwd IS the fixture repo - the way the action itself runs.
+    const probe = spawnSync(process.execPath, ['-e', `
+      const { resolveDiff } = require(${JSON.stringify(path.join(ROOT, 'src', 'diff.js'))});
+      const d = resolveDiff('main');
+      if (typeof d !== 'string' || d.length < 1048576) {
+        console.error('diff too small: ' + (d && d.length)); process.exit(3);
+      }
+      if (!d.includes('line 89999 padding') || !d.includes("weird 'name' with spaces.txt")) {
+        console.error('resolved diff is incomplete'); process.exit(4);
+      }
+      console.log('len=' + d.length);
+    `], { cwd: dir, encoding: 'utf-8' });
+    assert.strictEqual(probe.status, 0, `rc=${probe.status} ${probe.stderr || ''}${probe.stdout || ''}`);
+    assert.strictEqual(g(['status', '--porcelain']).stdout.trim(), '', 'fixture repo left dirty');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('diff: the split read is byte-identical to the whole read, across batch boundaries', () => {
+  const { dir, g } = initDiffRepo();
+  try {
+    writeFileSync(path.join(dir, 'base.txt'), 'base\n');
+    g(['add', '.']);
+    g(['commit', '-q', '-m', 'base']);
+    g(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    // 205 changed paths: more than one batch of 200, so the slicing and the
+    // chunk order are both under test, not just a single lucky batch.
+    for (let i = 0; i < 205; i += 1) {
+      writeFileSync(path.join(dir, `f${String(i).padStart(3, '0')}.txt`), `content ${i}\n`);
+    }
+    g(['add', '.']);
+    g(['commit', '-q', '-m', 'head']);
+    const whole = execSync('git diff origin/main...HEAD', { cwd: dir, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+    // The resolver reads process.cwd(); bind the run to the fixture repo the
+    // way every other real-git test in this file does.
+    const run = (cmd) => execSync(cmd, { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    const split = resolveDiffSplit('main', run);
+    assert.strictEqual(split, whole, 'the batched read is not byte-identical to the whole-range read');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('diff: the split read engages when the whole read fails (the backstop path)', () => {
+  // An injected run that fails EVERY whole-range read - the shape any ceiling
+  // exhaustion produces - while serving name-only and batched reads over 250
+  // paths, i.e. TWO batches, so chunk order is under test. The gate must still
+  // get the COMPLETE diff, concatenated in path order.
+  const calls = [];
+  const fakeRun = (cmd) => {
+    calls.push(cmd);
+    if (cmd === 'git diff origin/main...HEAD') throw new Error('ENOBUFS: buffer exceeded');
+    if (cmd.startsWith('git diff --name-only')) {
+      return `${Array.from({ length: 250 }, (_, i) => `f${i}.txt`).join('\0')}\0`;
+    }
+    if (cmd.startsWith('git diff origin/main...HEAD --')) return `CHUNK-${calls.length}\n`;
+    throw new Error(`unexpected command: ${cmd}`);
+  };
+  const diff = resolveDiff('main', fakeRun);
+  assert.strictEqual(diff, 'CHUNK-3\nCHUNK-4\n', 'the batched chunks did not concatenate in path order');
+  assert.ok(!calls.some((c) => c.startsWith('git fetch')), 'no fetch was attempted once the split read succeeded');
+});
+
+check('diff: a missing merge base still fails closed through the split read', () => {
+  const { dir, g } = initDiffRepo();
+  try {
+    writeFileSync(path.join(dir, 'x.txt'), 'x\n');
+    g(['add', '.']);
+    g(['commit', '-q', '-m', 'head']);
+    // NO origin/main ref exists: whole read fails, name-only fails, the
+    // best-effort fetch fails (no remote). Every path must end in null. The
+    // run is bound to the fixture cwd - the assertion is about THIS repo.
+    const run = (cmd) => execSync(cmd, { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+    assert.strictEqual(resolveDiff('main', run), null, 'a missing merge base did not fail closed');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('diff: an empty range (head equals base) is still not treated as a pass', () => {
+  const { dir, g } = initDiffRepo();
+  try {
+    writeFileSync(path.join(dir, 'x.txt'), 'x\n');
+    g(['add', '.']);
+    g(['commit', '-q', '-m', 'only']);
+    g(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    const run = (cmd) => execSync(cmd, { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+    assert.strictEqual(resolveDiff('main', run), null, 'an empty range was treated as a pass');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 
 console.log(`\n${passed} checks passed${process.exitCode ? ' (with failures)' : ''}`);
