@@ -1792,4 +1792,56 @@ check('v1.9.2: same shape without the marker still fires (control)', () => {
 });
 
 
+
+console.log('\n---- diff ceiling: a diff over 1 MiB must be read, not truncated ----');
+
+{
+  const { spawnSync } = require('child_process');
+  const fs = require('fs');
+  const os = require('os');
+  const path2 = require('path');
+  const { resolveDiff, MAX_DIFF_BYTES } = require('../src/diff');
+
+  // A throwaway repo with a base commit and a head commit whose diff is comfortably over 1 MiB -
+  // the ceiling that execSync applies when maxBuffer is omitted.
+  const dir = fs.mkdtempSync(path2.join(os.tmpdir(), 'slopgate-bigdiff-'));
+  const git = (a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'probe@example.invalid']);
+  git(['config', 'user.name', 'slopgate test']);
+  fs.writeFileSync(path2.join(dir, 'big.txt'), 'base\n');
+  git(['add', '.']);
+  git(['commit', '-q', '-m', 'base']);
+  git(['branch', '-M', 'main']);
+  fs.writeFileSync(path2.join(dir, 'big.txt'), `${'x'.repeat(2 * 1024 * 1024)}\n`);
+  git(['add', '.']);
+  git(['commit', '-q', '-m', 'head']);
+  // A REAL remote, because resolveDiff's own retry runs `git fetch origin main --depth=200` when the
+  // first attempt comes back empty - and against a repo with no origin that fetch fails, the retry
+  // returns nothing, and resolveDiff returns null WITHOUT EVER REACHING execSync. The first version
+  // of this test had no remote and passed against an unfixed gate: it was measuring its own fixture.
+  const bare = fs.mkdtempSync(path2.join(os.tmpdir(), 'slopgate-bigdiff-origin-'));
+  spawnSync('git', ['init', '-q', '--bare', bare]);
+  git(['remote', 'add', 'origin', bare]);
+  git(['push', '-q', 'origin', 'main']);
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD~1']);
+
+  const prev = process.cwd();
+  process.chdir(dir);
+  try {
+    const diff = resolveDiff('main');
+    check('a 2 MiB diff is READ, not reported as an empty range', () => {
+      assert.ok(diff !== null, 'resolveDiff returned null - it swallowed an ENOBUFS');
+      assert.ok(diff.length > 1024 * 1024, `diff came back as ${diff && diff.length} bytes`);
+    });
+    check('the ceiling is above the old 1 MiB execSync default', () => {
+      assert.ok(MAX_DIFF_BYTES > 1024 * 1024, `MAX_DIFF_BYTES is ${MAX_DIFF_BYTES}`);
+    });
+  } finally {
+    process.chdir(prev);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(bare, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${passed} checks passed${process.exitCode ? ' (with failures)' : ''}`);
