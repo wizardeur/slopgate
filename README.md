@@ -2,7 +2,7 @@
 
 A deterministic pull-request gate. It reviews the changed lines of a PR for AI-generated slop and for 22 CWE-mapped classes of security defects, verifies whether findings sit on a reachable path from an entrypoint to a dangerous sink, and posts a single self-updating verdict comment. Runs as a GitHub Action or a local CLI.
 
-No LLM calls and no telemetry: nothing about your code leaves the runner. The only remote operation is the `git fetch` of the base ref when it is missing locally. Zero runtime dependencies; Node >= 20 and an optional `python3` (Python AST analysis). 93 checks pass via `npm test`.
+No LLM calls and no telemetry: nothing about your code leaves the runner. The only remote operation is the `git fetch` of the base ref when it is missing locally. Zero runtime dependencies; Node >= 20 and an optional `python3` (Python AST analysis). 138 checks pass via `npm test`.
 
 ## What it checks
 
@@ -12,7 +12,7 @@ No LLM calls and no telemetry: nothing about your code leaves the runner. The on
 
 | Rule | CWE | Detects |
 | --- | --- | --- |
-| SG-SEC-001 | 89 | SQL built by string interpolation or concatenation (a query passed with bind parameters is not a hit) |
+| SG-SEC-001 | 89 | SQL built by interpolating or concatenating a value. A statement whose only dynamic parts are `$n` bind parameters and a constant identifier name is not a hit; the finding names the interpolated expression |
 | SG-SEC-002 | 798 / 256 | Credential literals, seeded accounts, plaintext password comparison |
 | SG-SEC-003 | 639 / 862 | Client-supplied identity used without an authorization binding (IDOR) |
 | SG-SEC-004 | 78 / 94 | Shell or code execution built from untrusted input |
@@ -37,7 +37,22 @@ No LLM calls and no telemetry: nothing about your code leaves the runner. The on
 
 ### Rule scope notes
 
-Two rules state what they cover exactly, instead of implying more than they check.
+Three rules state what they cover exactly, instead of implying more than they check.
+
+**SG-SEC-001** distinguishes WHAT is interpolated, not just that something is. A
+statement is a hit when it interpolates or concatenates a value into the SQL text,
+and the finding names the expression (`"userId"`, `"this.table"`). It is not a hit
+when every dynamic part is a constant identifier name and the statement binds its
+values with `$n`: a bare `SCREAMING_SNAKE_CASE` identifier that stands after `FROM`
+/ `JOIN` / `INTO` / `UPDATE` / `TABLE` / `RETURNING` (or a qualifier dot) or is
+named `..._TABLE`, `..._COLUMNS`, `..._SCHEMA`. The statement
+`SELECT * FROM ${MAILBOX_TABLE} WHERE id = $1` is therefore not a hit; without the
+`$n` bind parameter the same statement still needs a marker, because the rule only
+exempts a statement whose value path it can see. Two limits are deliberate: `f"..."`,
+`% var` and `.format()` are never exempt, because the gate cannot read which
+identifier a format placeholder receives; and a member expression such as
+`${this.table}` is never exempt, because the gate cannot see that the value was
+validated where it was assigned.
 
 **SG-SEC-011** flags references that move on their own: a branch, `@latest`, a wildcard range, a git ref over plain HTTP. A version tag is a released version rather than a floating ref, so a tag pin is not a hit by default; a tag is still mutable, but the gate can only read the ref text. Set `"requireShaPins": true` in `.slopgate.json` to also require a full 40-character commit SHA for `uses:` references: with it on, a tag pin or a branch ref both block, and a full SHA or a local (`./path`) action never does. It changes nothing else: container images and package ranges keep their previous matching.
 
@@ -110,7 +125,7 @@ Any repository, public or private, can reference the action directly once this r
 ## Development
 
 ```sh
-npm test        # 93 checks, no test framework, no dependencies to install
+npm test        # 138 checks, no test framework, no dependencies to install
 ```
 
 The gate has zero runtime dependencies; the only third-party code in the tree is the vendored, version-pinned `@babel/parser` under `vendor/` (MIT). Layout: `src/shields.js` (the rules), `src/engine.js` (pipeline: normalization, suppression, severity gating, scoring), `src/diff.js` (fail-closed diff acquisition shared by both entry points), `src/analyzers/` (Python AST, JS/TS AST, import graph, external tools), `src/verdict.js` and `src/github.js` (verdict comment), `src/sarif.js`, `src/action.js` and `bin/slopgate.js` (entry points), `test/` (fixtures + checks).
