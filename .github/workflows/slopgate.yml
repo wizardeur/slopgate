@@ -24,7 +24,7 @@ jobs:
           auto_polish: 'false'
 
   # The gate job above only proves that this version of SlopGate sees no defect in itself.
-  # It never ran the suite, so a green "gate" said nothing about the 93 checks passing.
+  # It never ran the suite, so a green "gate" said nothing about the 138 checks passing.
   # This job makes the suite itself a gate: red suite blocks the pull request.
   # It is independent of the gate job on purpose. Neither step needs the other, and a
   # failure in one must not hide the verdict of the other.
@@ -44,8 +44,8 @@ jobs:
         with:
           node-version: '20'
       # The suite is not pure Node. src/analyzers/python-ast.js spawns python3 and
-      # reports available(): false without it, which fails 16 checks. Measured:
-      # 93 passed with python3 on PATH, 77 with a python3 shim that exits 127.
+      # reports available(): false without it, which fails 19 checks. Measured:
+      # 138 passed with python3 on PATH, 119 with a python3 shim that exits 127.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'

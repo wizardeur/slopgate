@@ -354,6 +354,101 @@ check('SG-SEC-001: .format() placeholders inside the SQL text are still flagged'
   assert.strictEqual(found.length, 1, JSON.stringify(found));
 });
 
+// ---- SG-SEC-001: constant identifier vs interpolated value ------------------
+// MEASURED 2026-11-19 (card 10b0c3a6, dsh-nerve). The dominant SQL shape there
+// is a module-constant table name plus $n bind parameters, and every such
+// statement needed an inline ignore marker. The two-file reproduction before the
+// change reported BOTH files; the rule now discriminates: a constant identifier
+// is not a value, and a value is still a hit that NAMES the expression.
+const sec001 = (files) => {
+  const diff = Object.entries(files)
+    .map(([file, lines]) =>
+      [
+        `diff --git a/${file} b/${file}`,
+        '--- /dev/null',
+        `+++ b/${file}`,
+        `@@ -0,0 +1,${lines.length} @@`,
+        ...lines.map((line) => `+${line}`),
+      ].join('\n')
+    )
+    .join('\n');
+  return evaluate(diff).securityFindings.filter((x) => x.ruleId === 'SG-SEC-001');
+};
+
+check('SG-SEC-001: a constant identifier plus $n bind parameters is not a hit', () => {
+  // The exact dsh-mailbox/store.ts statement, ignore marker removed.
+  const found = sec001({
+    'store.ts': ['export const Q = `SELECT * FROM ${MAILBOX_TABLE} WHERE id LIKE $1 ORDER BY id`;'],
+  });
+  assert.deepStrictEqual(found, [], JSON.stringify(found));
+});
+
+check('SG-SEC-001: concatenating a constant identifier is not a hit either', () => {
+  // The dsh-board/service.ts shape, where the identifier sits on its own line.
+  const found = sec001({
+    'service.ts': [
+      'const rows = this.pg.query(',
+      '  "SELECT id FROM " +',
+      '    BOARD_CARDS_TABLE +',
+      '    " WHERE id::text LIKE $1 ORDER BY id LIMIT $2",',
+      '  [prefix, LIMIT],',
+      ');',
+    ],
+  });
+  assert.deepStrictEqual(found, [], JSON.stringify(found));
+});
+
+check('SG-SEC-001: a value concatenated with $n present still fires and names it', () => {
+  // The control for the two checks above: the SAME parameterized statement, but
+  // the dynamic part is a value, so the exemption must not apply.
+  const found = sec001({
+    'api.js': ["db.query(\"SELECT * FROM t WHERE id = '\" + userId + \"' AND tenant = $1\");"],
+  });
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.strictEqual(found[0].cwe, 'CWE-89');
+  assert.ok(found[0].title.includes('"userId"'), found[0].title);
+});
+
+check('SG-SEC-001: a member expression is not a module constant, so it still fires', () => {
+  // dsh-tool-evidence/carrier.ts interpolates ${this.table}: an IDENTIFIER-
+  // validated constructor value, but the gate cannot read that validation, so it
+  // is not exempt. Only bare SCREAMING_SNAKE_CASE names are.
+  const found = sec001({ 'carrier.ts': ['db.query(`INSERT INTO ${this.table} (a) VALUES ($1)`);'] });
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.ok(found[0].title.includes('"this.table"'), found[0].title);
+});
+
+check('SG-SEC-001: an uppercase VALUE name is not an identifier name', () => {
+  // SCREAMING_SNAKE_CASE alone is not enough, or `WHERE email = ${EMAIL}` would
+  // slip through: the name must be in a SQL name position or named for one.
+  const found = sec001({
+    'v.js': ['db.query(`SELECT * FROM users WHERE email = ${EMAIL} AND tenant = $1`);'],
+  });
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.ok(found[0].title.includes('"EMAIL"'), found[0].title);
+});
+
+check('SG-SEC-001: a constant identifier WITHOUT a bind parameter still fires', () => {
+  // Scoped to parameterized statements: without $n the gate cannot show that the
+  // value path is the driver's, so the marker stays.
+  const found = sec001({ 'q.js': ['db.query(`SELECT * FROM ${MAILBOX_TABLE}`);'] });
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+});
+
+check('SG-SEC-001: a $n from an unrelated statement does not exempt this one', () => {
+  // The bind parameter is read from the pair's OWN statement (between statement
+  // terminators), not from the hunk: a neighbouring parameterized query must not
+  // turn a statement with no value path into an exempt one.
+  const found = sec001({
+    'two.js': [
+      'db.query(`SELECT * FROM ${MAILBOX_TABLE}`);',
+      'db.query(`SELECT id FROM ${OTHER_TABLE} WHERE id = $1`);',
+    ],
+  });
+  assert.strictEqual(found.length, 1, JSON.stringify(found));
+  assert.ok(found[0].title.includes('"MAILBOX_TABLE"'), found[0].title);
+});
+
 check('SG-SEC-009: env: AS A CONTEXT LINE still exempts the added key under it', () => {
   // THE SHAPE THAT GOT THROUGH v1.10.1. The fixture above adds `env:` itself, so
   // the block header is an ADDED line and the map sees it. The real workflow is

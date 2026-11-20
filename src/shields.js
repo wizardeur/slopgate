@@ -14,12 +14,85 @@
 // zero-width/format characters stripped, so unicode tricks cannot hide a
 // pattern from these regexes (see HIDDEN_CHARS in engine.js).
 
+// ---- SG-SEC-001: which interpolations are string-built SQL -------------------
+//
+// MEASURED 2026-11-19 (card 10b0c3a6, dsh-nerve). The dominant SQL shape there is
+// a module-constant table name interpolated into a statement that binds every
+// VALUE with $n:
+//
+//     `SELECT * FROM ${MAILBOX_TABLE} WHERE id LIKE $1 ORDER BY id`
+//
+// Nothing in that statement is built from data, yet the rule fired on it, so
+// every new statement needed an inline ignore marker. Reproduced before the
+// change on a two-file fixture: BOTH files were hits.
+//
+// The exemption is narrow on purpose. It applies only when ALL of these hold:
+//   1. at least one $n bind parameter is present - the value path is the
+//      driver's, not the string's;
+//   2. every recognized interpolation is a bare SCREAMING_SNAKE_CASE identifier
+//      (`${EXPR}`, `"..." + EXPR`, `EXPR + "..."`);
+//   3. that identifier stands where SQL expects a name (after FROM / JOIN / INTO
+//      / UPDATE / TABLE / RETURNING, or a qualifier dot) or is named for one
+//      (..._TABLE, ..._COLUMNS, ..._SCHEMA);
+//   4. at least one interpolation was recognized at all - `f"..."`, `% var` and
+//      `.format()` are not, because the gate cannot read which identifier a
+//      format placeholder receives, so those keep firing.
+// A value interpolated or concatenated into the SQL is therefore still a hit,
+// and the finding names the expression: `userId`, `this.table`.
+const SQL_TITLE = 'Unparameterized SQL Injection / Raw Query Execution';
+const BIND_PARAM = /\$\d+/;
+const CONSTANT_IDENTIFIER = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
+const IDENTIFIER_NAME_ROLE = /(?:TABLES?|SCHEMAS?|COLUMNS?|FIELDS?|RELATIONS?|VIEWS?|INDEX(?:ES)?)$/;
+const IDENTIFIER_SLOT = /(?:^|[^\w$])(?:FROM|JOIN|INTO|UPDATE|TABLE|RETURNING)\s*$|\.$/i;
+
+// Every interpolation the rule can read, with the SQL text immediately before
+// it. `before` is what decides identifier-versus-value position; for a
+// concatenation it is the string literal's CONTENT, because the quote that opens
+// the literal is code, not SQL.
+function interpolationExpressions(text) {
+  const found = [];
+  for (const m of text.matchAll(/\$\{([^}]*)\}/g)) {
+    found.push({ expr: m[1].trim(), before: text.slice(0, m.index) });
+  }
+  for (const m of text.matchAll(/"([^"\n]*)"\s*\+\s*([A-Za-z_$][\w$]*)/g)) {
+    found.push({ expr: m[2], before: m[1] });
+  }
+  for (const m of text.matchAll(/'([^'\n]*)'\s*\+\s*([A-Za-z_$][\w$]*)/g)) {
+    found.push({ expr: m[2], before: m[1] });
+  }
+  for (const m of text.matchAll(/([A-Za-z_$][\w$]*)\s*\+\s*(["'])(?:(?!\2)[^\\\n])*\2/g)) {
+    found.push({ expr: m[1], before: text.slice(0, m.index) });
+  }
+  return found;
+}
+
+const isConstantIdentifier = ({ expr, before }) =>
+  CONSTANT_IDENTIFIER.test(expr) && (IDENTIFIER_SLOT.test(before) || IDENTIFIER_NAME_ROLE.test(expr));
+
+// True when every dynamic part of this text is a constant identifier name and
+// there was at least one recognized interpolation - the shape the rule must not
+// block. Used both for a single line and for one matched verb/interpolation pair,
+// so prose elsewhere in the hunk cannot poison the verdict.
+function constantIdentifierOnly(text) {
+  const found = interpolationExpressions(text);
+  return found.length > 0 && found.every(isConstantIdentifier);
+}
+
+// The finding names what was interpolated, so a reader can tell a table constant
+// from a value without re-reading the line.
+function sqlVariant(text) {
+  const found = interpolationExpressions(text);
+  const named = found.find((f) => !isConstantIdentifier(f)) || found[0];
+  if (!named) return null;
+  return { title: `${SQL_TITLE}: SQL text built from the interpolated expression "${named.expr}"` };
+}
+
 const shields = [
   {
     id: 'SG-SEC-001',
     cwe: 'CWE-89',
     severity: 'CRITICAL',
-    title: 'Unparameterized SQL Injection / Raw Query Execution',
+    title: SQL_TITLE,
     remediation: 'Use parameterized queries (?, $1, :param) and strict read-only query allowlists.',
     appliesTo: 'non-test',
     match(line) {
@@ -37,7 +110,13 @@ const shields = [
       // interpolation would drown every legitimate {$this->table}.
       const phpSuperglobalSql =
         /\b(?:SELECT|INSERT|UPDATE|DELETE)\b/i.test(line) && /\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\b/i.test(line);
-      return sqlViaInterpolation || phpSuperglobalSql; // slopgate-ignore: pattern source co-occurs with its own trigger by construction
+      // A PHP superglobal is a value source by construction: never exempt.
+      if (phpSuperglobalSql) return true; // slopgate-ignore: pattern source co-occurs with its own trigger by construction
+      if (!sqlViaInterpolation) return null;
+      // Constant table/column name plus $n bind parameters: nothing is built
+      // from data (see the header comment above the helpers).
+      if (BIND_PARAM.test(line) && constantIdentifierOnly(line)) return null;
+      return sqlVariant(line) || true;
     },
     // Multi-line statements: a SQL verb and an interpolation marker within a
     // bounded window of the same added block, in either order.
@@ -74,10 +153,44 @@ const shields = [
       // str.format placeholders are written {} INSIDE the query, and forbidding the
       // brace lost that case (measured: .format went 1 -> 0 and only the brace did it).
       const gap = '[^;)\\n]{0,240}?';
-      return (
-        new RegExp(sqlVerb + gap + interp, 'i').test(block) ||
-        new RegExp(interp + gap + sqlVerb, 'i').test(block)
-      );
+      const pairings = [sqlVerb + gap + interp, interp + gap + sqlVerb].flatMap((source) => [
+        ...block.matchAll(new RegExp(source, 'gi')),
+      ]);
+      if (pairings.length === 0) return null;
+      // Every pair is classified on its OWN text, so a non-SQL `${...}` elsewhere
+      // in the hunk (a log line, a comment) cannot poison the exemption - but ONE
+      // pair that interpolates a value still keeps the whole block a hit, so the
+      // exemption can never trade a true positive for a false negative.
+      // The classification text is the pair's own line span, not the matched
+      // fragment: `interp` stops at `${`, and a pairing found inside a string
+      // literal starts after its opening quote, so the fragment alone can hide
+      // the identifier being interpolated. The span is still narrow - another
+      // line of the hunk cannot change the verdict.
+      const pairText = (p) => {
+        const lineStart = block.lastIndexOf('\n', p.index) + 1;
+        const lineEnd = block.indexOf('\n', p.index + p[0].length);
+        return block.slice(lineStart, lineEnd === -1 ? block.length : lineEnd);
+      };
+      // The bind parameters are the pair's own statement's, not the hunk's: the
+      // window runs between statement terminators, so a `$n` from an unrelated
+      // statement in the same hunk cannot exempt this one. It still spans lines,
+      // because a bind parameter can sit below a query that is split on `+`
+      // (`... WHERE id LIKE $1`).
+      const statementText = (p) => {
+        const start = block.lastIndexOf(';', p.index) + 1;
+        const end = block.indexOf(';', p.index + p[0].length);
+        return block.slice(start, end === -1 ? block.length : end);
+      };
+      if (pairings.every((p) => BIND_PARAM.test(statementText(p)) && constantIdentifierOnly(pairText(p)))) {
+        return null;
+      }
+      // Attribute the finding to the line that carries the first pair; the
+      // region alone is enough to name the expression.
+      const found = pairings.reduce((a, b) => (a.index <= b.index ? a : b));
+      const start = block.lastIndexOf('\n', found.index) + 1;
+      const nextBreak = block.indexOf('\n', found.index + found[0].length);
+      const line = block.slice(start, nextBreak === -1 ? block.length : nextBreak);
+      return sqlVariant(line) || sqlVariant(found[0]) || true;
     },
   },
 

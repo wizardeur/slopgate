@@ -4,6 +4,29 @@ All notable changes to SlopGate. Versions follow the tag names; the floating
 `v1` tag does not exist, so a consumer pins an exact version and must move it
 deliberately.
 
+## v1.10.8
+
+### Fixed
+
+- **SG-SEC-001 blocked a parameterized statement that interpolated only a constant
+  identifier.** Measured 2026-11-19 (card `10b0c3a6`, `dsh-nerve`): the dominant SQL
+  shape there is a module-constant table name with `$n` bind parameters,
+  `` `SELECT * FROM ${MAILBOX_TABLE} WHERE id LIKE $1 ORDER BY id` ``. Nothing in
+  that statement is built from data, but the rule fired because an interpolation
+  marker and a SQL verb shared a line, so every new statement carried an inline
+  `slopgate-ignore` marker. A two-file fixture (constant identifier plus `$n` vs a
+  value concatenated into the SQL) reported BOTH files as hits before the change.
+  The rule now reads WHAT is interpolated: a statement whose only dynamic parts are
+  `$n` bind parameters and bare `SCREAMING_SNAKE_CASE` identifier names (in a SQL
+  name position, or named `..._TABLE` / `..._COLUMNS` / `..._SCHEMA`) is not a hit.
+  A value interpolated or concatenated into the statement still blocks, and the
+  finding now NAMES the expression (`"userId"`, `"this.table"`). Not exempt, on
+  purpose: `f"..."`, `% var` and `.format()` (the gate cannot read which identifier
+  a placeholder receives), member expressions such as `${this.table}` (the gate
+  cannot see where the value was validated), and any statement without a `$n` bind
+  parameter. Consumers can delete the SG-SEC-001 markers on statements of the first
+  shape; every site that stays a hit is one of the listed exceptions.
+
 ## v1.10.7
 
 ### Fixed
